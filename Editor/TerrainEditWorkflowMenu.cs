@@ -14,8 +14,8 @@ namespace AiTerrainWorkflow
     /// </summary>
     public static class TerrainEditWorkflowMenu
     {
-        /// <summary>当前工具版本号（有变更时手动更新）。</summary>
-        private const string Version = "v1.1";
+    /// <summary>当前工具版本号（有变更时手动更新）。</summary>
+    private const string Version = "v1.2";
 
         /// <summary>菜单前缀（Tools 下拉下）。</summary>
         private const string MenuRoot = "Tools/Terrain Edit Workflow/";
@@ -63,14 +63,17 @@ namespace AiTerrainWorkflow
         }
 
         /// <summary>
-        /// 获取（不存在则创建）测试用 PanelSettings 资产，并确保挂上运行时主题。
-        /// 主题查找顺序：内置包默认主题 → 全库搜索 ThemeStyleSheet → 备用最小主题 .tss。
+        /// 获取测试用 PanelSettings 资产（Gui/TestPanelSettings.asset，已随仓库预置并绑定主题）。
+        /// 资产存在时直接加载，避免 CreateInstance 触发 "No Theme Style Sheet" 警告；
+        /// 仅当资产缺失（极端情况）才兜底创建并尝试补绑主题。
         /// </summary>
         public static PanelSettings EnsurePanelSettingsAsset()
         {
+            // 正常路径：资产预置在仓库中（Gui/TestPanelSettings.asset），直接加载，零警告
             var ps = AssetDatabase.LoadAssetAtPath<PanelSettings>(PanelSettingsAssetPath);
             if (ps == null)
             {
+                // 兜底：资产缺失时创建（此时 Unity 会打一次 No Theme 警告，属正常）
                 ps = ScriptableObject.CreateInstance<PanelSettings>();
                 AssetDatabase.CreateAsset(ps, PanelSettingsAssetPath);
             }

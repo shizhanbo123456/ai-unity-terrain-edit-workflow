@@ -79,7 +79,7 @@ public class ObjectGroup : ScriptableObject
 | `Tools / Terrain Edit Workflow / Log Version` | Console 打印当前工具版本号 |
 | `Tools / Terrain Edit Workflow / Create UI Test Setup` | 一键创建 2 个 UI Toolkit 运行时测试物体 |
 
-- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.1**）；后续功能有变更时手动同步更新
+- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.2**）；后续功能有变更时手动同步更新
 
 ## Gui / UI Toolkit 运行时测试（Play 模式）
 
