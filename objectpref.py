@@ -15,11 +15,13 @@ JSON 格式保证：
     python objectpref.py set <key> <value> [--overwrite] [--file <路径>]
     python objectpref.py get <key> [--file <路径>]
     python objectpref.py list [--file <路径>]
+    python objectpref.py delete <key> [--file <路径>]        # 别名: rm / remove
 
 说明:
     set     录入 / 更新；若 <key> 已存在且未显式加 --overwrite，则报错退出（不覆盖）
     get     读取 <key> 对应的 value，输出到 stdout；key 不存在时报错退出
     list    列出当前数据文件中全部 key-value（按 key 排序）
+    delete  删除指定 <key>（不存在则报错退出）；所有读写删都走本工具，不要直接改 json 文件
 
 退出码: 0 = 成功；1 = 参数/业务错误（如重复 key 未覆盖、key 不存在、JSON 损坏）
 """
@@ -129,6 +131,22 @@ def cmd_list(args) -> int:
     return 0
 
 
+def cmd_delete(args) -> int:
+    key = args.key
+    if not key or key != key.strip():
+        sys.stderr.write("错误: key 不能为空或全为空白字符\n")
+        return 1
+
+    data = load_data(args.file)
+    if key not in data:
+        sys.stderr.write(f"错误: key '{key}' 不存在，无需删除（可用 list 子命令查看全部 key）\n")
+        return 1
+    del data[key]
+    save_data(args.file, data)
+    print(f"ObjectPref: 删除成功 key='{key}' -> {args.file}")
+    return 0
+
+
 FILE_HELP = "数据文件路径（默认: {0}）".format(DEFAULT_DATA_FILE)
 
 
@@ -169,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_list = sub.add_parser("list", help="列出全部 key-value")
     add_file_arg(p_list)
     p_list.set_defaults(func=cmd_list)
+
+    p_del = sub.add_parser("delete", aliases=["rm", "remove"], help="删除指定 key（不存在则报错）")
+    add_file_arg(p_del)
+    p_del.add_argument("key", help="键")
+    p_del.set_defaults(func=cmd_delete)
 
     return parser
 

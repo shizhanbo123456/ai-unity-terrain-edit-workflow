@@ -45,14 +45,18 @@ python objectpref.py get <key>
 # 列出全部 key-value
 python objectpref.py list
 
+# 删除指定 key（不存在则报错退出；别名 rm / remove）
+python objectpref.py delete <key>
+
 # 可选 --file <路径>：自定义数据文件（写在子命令前后均可）
 python objectpref.py set foo bar --file ./my.json
 python objectpref.py --file ./my.json get foo
 ```
 
+- **所有读写删都通过本工具完成**，不要直接编辑 `objectpref.json` 文件
 - **JSON 格式保证**：标准库 `json` 序列化（不手写拼接）；**原子写入**（临时文件 + `os.replace`），写入中断不会损坏原文件；文件缺失视为空，内容非法时明确报错且不静默覆盖
 - 退出码：`0` 成功 / `1` 错误（重复 key 未覆盖、key 不存在、JSON 损坏等）
-- 数据文件随 git 版本控制，可跨机器同步
+- 数据文件本地使用（已在 `.gitignore` 中忽略 `objectpref.json`），不随 git 同步，保证各项目本地记录互不干扰
 
 ## ObjectGroup（ScriptableObject）
 
