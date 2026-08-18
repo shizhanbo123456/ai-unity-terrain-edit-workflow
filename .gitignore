@@ -4,3 +4,9 @@
 objectpref.json
 # 对应的 Unity 元数据也一并忽略（数据文件不跨机器共享，GUID 无需稳定）
 objectpref.json.meta
+
+# LayerEditor 导出产物（不纳入版本控制）
+# 绘画窗口保存到 LayerEditor/Output/ 的层图 PNG 属本地导出产物，
+# 与 objectpref.json 同理不进版本库；.meta 一并忽略。
+LayerEditor/Output/
+LayerEditor/Output.meta
