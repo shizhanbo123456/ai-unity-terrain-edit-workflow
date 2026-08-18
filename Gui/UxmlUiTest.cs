@@ -24,13 +24,15 @@ namespace AiTerrainWorkflow.Gui
         [Tooltip("USS 样式资产；留空时编辑器模式下自动从 Gui/TestStyle.uss 加载")]
         [SerializeField] private StyleSheet styleSheet;
 
+        [Tooltip("PanelSettings 资产（带主题）。留空时编辑器模式下自动加载 Gui/TestPanelSettings.asset")]
+        [SerializeField] private PanelSettings panelSettings;
+
         private void Awake()
         {
             var uiDocument = GetComponent<UIDocument>();
             if (uiDocument.panelSettings == null)
             {
-                // 运行时动态创建 PanelSettings（不落盘为资产，测试用足够）
-                uiDocument.panelSettings = ScriptableObject.CreateInstance<PanelSettings>();
+                uiDocument.panelSettings = ResolvePanelSettings();
             }
 
 #if UNITY_EDITOR
@@ -59,6 +61,28 @@ namespace AiTerrainWorkflow.Gui
                     "未加载到 UXML。请在 Inspector 中把 TestLayout.uxml 拖到 visualTree 字段，" +
                     "或确认在 Unity 编辑器中运行（Play 模式）。"));
             }
+        }
+
+        /// <summary>
+        /// 解析 PanelSettings：Inspector 字段 → 编辑器模式下自动加载资产（带主题）→ 运行时临时创建（无主题兜底）。
+        /// 注意：运行时 new 出来的 PanelSettings 没有主题样式表（No Theme Style Sheet 警告），
+        /// 请优先使用 Gui/TestPanelSettings.asset（由菜单 Create UI Test Setup 自动创建并绑定主题）。
+        /// </summary>
+        private PanelSettings ResolvePanelSettings()
+        {
+            if (panelSettings != null)
+            {
+                return panelSettings;
+            }
+#if UNITY_EDITOR
+            var asset = UnityEditor.AssetDatabase.LoadAssetAtPath<PanelSettings>(
+                "Assets/unity-terrain-edit-workflow/Gui/TestPanelSettings.asset");
+            if (asset != null)
+            {
+                return asset;
+            }
+#endif
+            return ScriptableObject.CreateInstance<PanelSettings>();
         }
     }
 }

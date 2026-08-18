@@ -18,23 +18,47 @@ namespace AiTerrainWorkflow.Gui
     [RequireComponent(typeof(UIDocument))]
     public class RuntimeUiTest : MonoBehaviour
     {
-        /// <summary>事件日志：最多保留的行数。</summary>
-        private const int MaxLogLines = 12;
+    /// <summary>事件日志：最多保留的行数。</summary>
+    private const int MaxLogLines = 12;
 
-        private UIDocument _uiDocument;
-        private readonly List<string> _logLines = new List<string>();
-        private Label _logLabel;
+    [Tooltip("PanelSettings 资产（带主题）。留空时编辑器模式下自动加载 Gui/TestPanelSettings.asset")]
+    [SerializeField] private PanelSettings panelSettings;
 
-        private void Awake()
+    private UIDocument _uiDocument;
+    private readonly List<string> _logLines = new List<string>();
+    private Label _logLabel;
+
+    private void Awake()
+    {
+        _uiDocument = GetComponent<UIDocument>();
+        if (_uiDocument.panelSettings == null)
         {
-            _uiDocument = GetComponent<UIDocument>();
-            if (_uiDocument.panelSettings == null)
-            {
-                // 运行时动态创建 PanelSettings（不落盘为资产，测试用足够）
-                _uiDocument.panelSettings = ScriptableObject.CreateInstance<PanelSettings>();
-            }
-            BuildUi(_uiDocument.rootVisualElement);
+            _uiDocument.panelSettings = ResolvePanelSettings();
         }
+        BuildUi(_uiDocument.rootVisualElement);
+    }
+
+    /// <summary>
+    /// 解析 PanelSettings：Inspector 字段 → 编辑器模式下自动加载资产（带主题）→ 运行时临时创建（无主题兜底）。
+    /// 注意：运行时 new 出来的 PanelSettings 没有主题样式表（No Theme Style Sheet 警告），
+    /// 请优先使用 Gui/TestPanelSettings.asset（由菜单 Create UI Test Setup 自动创建并绑定主题）。
+    /// </summary>
+    private PanelSettings ResolvePanelSettings()
+    {
+        if (panelSettings != null)
+        {
+            return panelSettings;
+        }
+#if UNITY_EDITOR
+        var asset = UnityEditor.AssetDatabase.LoadAssetAtPath<PanelSettings>(
+            "Assets/unity-terrain-edit-workflow/Gui/TestPanelSettings.asset");
+        if (asset != null)
+        {
+            return asset;
+        }
+#endif
+        return ScriptableObject.CreateInstance<PanelSettings>();
+    }
 
         private void BuildUi(VisualElement root)
         {
