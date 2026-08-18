@@ -230,15 +230,11 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 var color = CurrentLayerColor;
                 color.a = 0.5f;
+                // 只显示已点顶点的十字标记，不画顶点间连线
                 for (int i = 0; i < _triPoints.Count; i++)
                 {
                     Vector2 p = PixToScreen(_triPoints[i], drawRect);
                     DrawCross(p, 5f, color);
-                    if (i > 0)
-                    {
-                        Vector2 prev = PixToScreen(_triPoints[i - 1], drawRect);
-                        DrawTinted(LineRect(prev, p, 2f), color);
-                    }
                 }
             }
         }
@@ -254,16 +250,6 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             DrawTinted(new Rect(p.x - half, p.y - 1, half * 2, 2), color);
             DrawTinted(new Rect(p.x - 1, p.y - half, 2, half * 2), color);
-        }
-
-        private Rect LineRect(Vector2 a, Vector2 b, float thickness)
-        {
-            Vector2 dir = b - a;
-            float len = dir.magnitude;
-            if (len < 0.001f) return new Rect(a.x, a.y, thickness, thickness);
-            Vector2 n = new Vector2(-dir.y / len, dir.x / len);
-            Vector2 c = (a + b) * 0.5f;
-            return new Rect(c.x - len * 0.5f, c.y - thickness * 0.5f, len, thickness);
         }
 
         private void DrawThickLine(Vector2 a, Vector2 b, float thickness, Color color)
