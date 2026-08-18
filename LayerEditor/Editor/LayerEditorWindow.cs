@@ -244,8 +244,9 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private Vector2 PixToScreen(Vector2Int p, Rect drawRect)
         {
+            // 与 ScreenToPix 对称的 y 翻转：像素 y=0（底行）显示在屏幕下方
             return new Vector2(drawRect.x + (p.x + 0.5f) * _canvasScale,
-                drawRect.y + (p.y + 0.5f) * _canvasScale);
+                drawRect.yMax - (p.y + 0.5f) * _canvasScale);
         }
 
         private void DrawCross(Vector2 p, float half, Color color)
@@ -412,7 +413,9 @@ namespace AiTerrainWorkflow.LayerEditor
             float ox = _canvasRect.x + (_canvasRect.width - dw) * 0.5f;
             float oy = _canvasRect.y + (_canvasRect.height - dh) * 0.5f;
             int px = Mathf.FloorToInt((screen.x - ox) / _canvasScale);
-            int py = Mathf.FloorToInt((screen.y - oy) / _canvasScale);
+            // y 翻转：像素数组 y=0 是图片底行（Texture2D 原点在左下），而屏幕 y 向下。
+            // 屏幕顶部(y 小)应对应像素 y 大(图片顶行)，否则显示会垂直镜像。
+            int py = h - 1 - Mathf.FloorToInt((screen.y - oy) / _canvasScale);
             px = Mathf.Clamp(px, 0, w - 1);
             py = Mathf.Clamp(py, 0, h - 1);
             return new Vector2Int(px, py);
