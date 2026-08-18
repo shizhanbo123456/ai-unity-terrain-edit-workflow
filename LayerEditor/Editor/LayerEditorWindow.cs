@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -13,7 +14,10 @@ namespace AiTerrainWorkflow.LayerEditor
     ///   矩形填充  拖拽定义对角区域，抬起时整块填充
     ///   三角填充  依次点击三个顶点，第三次点击时填充三角形
     /// 所有绘制完全覆盖目标像素（alpha=1，不模糊）；选中 layer0（透明）即擦除为过渡区域。
-    /// 支持撤销（Ctrl+Z / 工具栏按钮）；导出固定路径 PNG。
+    /// 支持撤销（Ctrl+Z / 工具栏按钮）。
+    ///
+    /// 源图片字段：设置后从该 PNG 加载画布、导出覆盖原图；留空则新建画布，
+    /// 导出到 Output 目录并以 1、2、3... 递增命名（不覆盖已有文件）。
     /// </summary>
     public class LayerEditorWindow : EditorWindow
     {
@@ -25,10 +29,14 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         private const string MenuPath = "Tools/Terrain Edit Workflow/Open Layer Editor";
+        private const string OutputPrefix = "LayerMap_"; // 新建模式导出文件前缀，如 LayerMap_1.png
 
         private LayerMap _map;
         private List<LayerInfo> _layers;
         private int _selectedLayer;
+
+        // 源图片：留空=新建画布；设置=加载该图并覆盖导出
+        private Texture2D _sourceImage;
 
         private Tool _tool = Tool.CircleBrush;
         private int _brushRadius = 6;
@@ -105,6 +113,7 @@ namespace AiTerrainWorkflow.LayerEditor
             _newHeight = Mathf.Clamp(EditorGUILayout.IntField(_newHeight, GUILayout.Width(48)), 8, 1024);
             if (GUILayout.Button("重置画布", EditorStyles.toolbarButton))
             {
+                _sourceImage = null; // 重置后按新尺寸新建，脱离源图片
                 _map.Resize(_newWidth, _newHeight);
                 _triPoints.Clear();
                 Repaint();
@@ -121,15 +130,103 @@ namespace AiTerrainWorkflow.LayerEditor
             }
 
             EditorGUILayout.EndHorizontal();
+
+            // 第二行：源图片字段
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            GUILayout.Label("源图片（留空=新建）", EditorStyles.miniLabel);
+            var newSource = (Texture2D)EditorGUILayout.ObjectField(
+                _sourceImage, typeof(Texture2D), false, GUILayout.Width(180));
+            if (newSource != _sourceImage)
+            {
+                _sourceImage = newSource;
+                ReloadFromSource();
+            }
+            if (_sourceImage != null)
+            {
+                GUILayout.Space(6);
+                GUILayout.Label("导出将覆盖该图片", EditorStyles.miniLabel);
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
             EditorGUILayout.Space(4);
+        }
+
+        /// <summary>根据源图片加载/新建画布（源图片非空则从 PNG 加载，否则新建）。</summary>
+        private void ReloadFromSource()
+        {
+            if (_map == null)
+                return;
+
+            if (_sourceImage != null)
+            {
+                string assetPath = AssetDatabase.GetAssetPath(_sourceImage);
+                string full = Path.Combine(Application.dataPath, "..", assetPath);
+                if (_map.LoadPng(full))
+                {
+                    _newWidth = _map.Width;
+                    _newHeight = _map.Height;
+                }
+                else
+                {
+                    Debug.LogWarning($"[LayerEditor] 无法从 {assetPath} 加载，已保持当前画布");
+                    _sourceImage = null;
+                }
+            }
+            else
+            {
+                _map.Resize(_newWidth, _newHeight);
+            }
+            _triPoints.Clear();
+            Repaint();
         }
 
         private void SavePng()
         {
-            string full = System.IO.Path.Combine(Application.dataPath, "..", LayerMap.DefaultSaveRelativePath);
+            string relative;
+            if (_sourceImage != null)
+            {
+                // 设置了源图片：覆盖原图
+                relative = AssetDatabase.GetAssetPath(_sourceImage);
+            }
+            else
+            {
+                // 新建模式：Output 目录递增命名，不覆盖已有文件
+                relative = NextOutputRelativePath();
+            }
+
+            string full = Path.Combine(Application.dataPath, "..", relative);
             _map.SavePng(full);
             AssetDatabase.Refresh();
-            Debug.Log($"[LayerEditor] 已保存: {LayerMap.DefaultSaveRelativePath}");
+
+            if (_sourceImage != null)
+            {
+                // 覆盖保存后重新导入资产，刷新 Texture2D 引用（避免旧引用失效）
+                _sourceImage = AssetDatabase.LoadAssetAtPath<Texture2D>(relative);
+            }
+            Debug.Log($"[LayerEditor] 已保存: {relative}");
+        }
+
+        /// <summary>
+        /// 计算下一个不冲突的导出路径：扫描 Output 目录下 LayerMap_*.png，
+        /// 取最大序号 +1（如已存在 LayerMap_1.png 则生成 LayerMap_2.png）。
+        /// </summary>
+        private string NextOutputRelativePath()
+        {
+            string dir = Path.Combine(Application.dataPath, "..",
+                LayerMap.DefaultOutputDirRelative);
+            Directory.CreateDirectory(dir);
+
+            int maxIndex = 0;
+            foreach (string file in Directory.GetFiles(dir, OutputPrefix + "*.png"))
+            {
+                string name = Path.GetFileNameWithoutExtension(file); // LayerMap_1
+                string numPart = name.Substring(OutputPrefix.Length);
+                if (int.TryParse(numPart, out int idx) && idx > maxIndex)
+                    maxIndex = idx;
+            }
+
+            return LayerMap.DefaultOutputDirRelative + "/" + OutputPrefix + (maxIndex + 1) + ".png";
         }
 
         // ---------- 画布 + 图层列表面板 ----------

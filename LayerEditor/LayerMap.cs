@@ -17,9 +17,9 @@ namespace AiTerrainWorkflow.LayerEditor
     /// </summary>
     public class LayerMap
     {
-        /// <summary>默认导出路径（Assets 相对路径）。</summary>
-        public const string DefaultSaveRelativePath =
-            "Assets/unity-terrain-edit-workflow/LayerEditor/Output/LayerMap.png";
+        /// <summary>默认输出目录（Assets 相对路径）；新建模式下的导出文件名自动递增。</summary>
+        public const string DefaultOutputDirRelative =
+            "Assets/unity-terrain-edit-workflow/LayerEditor/Output";
 
         public int Width { get; private set; }
         public int Height { get; private set; }
