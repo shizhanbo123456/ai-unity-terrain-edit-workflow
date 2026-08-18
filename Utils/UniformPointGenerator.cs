@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace UnityPythonBridge
+namespace AiTerrainWorkflow
 {
     /// <summary>
     /// 均匀分布随机点生成器（网格抖动 Jittered Grid，属分层采样）。

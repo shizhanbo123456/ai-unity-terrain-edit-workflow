@@ -6,11 +6,17 @@ AI 地形编辑工作流 —— 独立工具仓库，存放地形编辑相关的
 
 ```
 Utils/
-└── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
+├── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
+└── ObjectGroup.cs              # ObjectGroup ScriptableObject（组名 + GameObject 列表）
+
+Editor/
+└── TerrainEditWorkflowMenu.cs  # 菜单栏工具（Tools / Terrain Edit Workflow）
 
 objectpref.py                   # ObjectPref 命令行工具（key-value 信息录入/读取）
 objectpref.json                 # ObjectPref 数据文件（自动创建，JSON 对象 {"key": "value"}）
 ```
+
+C# 代码统一使用命名空间 `AiTerrainWorkflow`。
 
 ## Utils / UniformPointGenerator
 
@@ -47,3 +53,23 @@ python objectpref.py --file ./my.json get foo
 - **JSON 格式保证**：标准库 `json` 序列化（不手写拼接）；**原子写入**（临时文件 + `os.replace`），写入中断不会损坏原文件；文件缺失视为空，内容非法时明确报错且不静默覆盖
 - 退出码：`0` 成功 / `1` 错误（重复 key 未覆盖、key 不存在、JSON 损坏等）
 - 数据文件随 git 版本控制，可跨机器同步
+
+## ObjectGroup（ScriptableObject）
+
+一组 GameObject 的命名集合，作为资产保存在 Assets 下：右键 **Create → AiTerrainWorkflow → ObjectGroup**。
+
+```csharp
+public class ObjectGroup : ScriptableObject
+{
+    public string groupName;                 // 组名（如 "Forest Trees"）
+    public List<GameObject> gameObjects;     // 组内 GameObject 列表
+}
+```
+
+## 菜单栏工具（Tools / Terrain Edit Workflow）
+
+| 菜单项 | 功能 |
+|---|---|
+| `Tools / Terrain Edit Workflow / Log Version` | Console 打印当前工具版本号 |
+
+- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.0**）；后续功能有变更时手动同步更新
