@@ -221,7 +221,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
                 else if (_tool == Tool.CircleBrush)
                 {
-                    DrawThickLine(start, cur, _brushRadius * _canvasScale, color);
+                    // 预览线宽 = 直径（2×radius），与实际 DrawLine 的条带宽一致
+                    DrawThickLine(start, cur, _brushRadius * 2f * _canvasScale, color);
                 }
             }
 
