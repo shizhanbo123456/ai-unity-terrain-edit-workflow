@@ -12,6 +12,12 @@ Utils/
 Editor/
 └── TerrainEditWorkflowMenu.cs  # 菜单栏工具（Tools / Terrain Edit Workflow）
 
+Gui/
+├── RuntimeUiTest.cs            # UI Toolkit 运行时测试（纯 C# 构建，Play 模式）
+├── UxmlUiTest.cs               # UI Toolkit 运行时测试（UXML/USS 资产加载，Play 模式）
+├── TestLayout.uxml             # 测试布局资产
+└── TestStyle.uss               # 测试样式资产
+
 objectpref.py                   # ObjectPref 命令行工具（key-value 信息录入/读取）
 objectpref.json                 # ObjectPref 数据文件（自动创建，JSON 对象 {"key": "value"}）
 ```
@@ -71,5 +77,19 @@ public class ObjectGroup : ScriptableObject
 | 菜单项 | 功能 |
 |---|---|
 | `Tools / Terrain Edit Workflow / Log Version` | Console 打印当前工具版本号 |
+| `Tools / Terrain Edit Workflow / Create UI Test Setup` | 一键创建 2 个 UI Toolkit 运行时测试物体 |
 
-- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.0**）；后续功能有变更时手动同步更新
+- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.1**）；后续功能有变更时手动同步更新
+
+## Gui / UI Toolkit 运行时测试（Play 模式）
+
+UI Toolkit 在 Unity 2022.3 **内置、零安装**。本目录提供两套 Play 模式可行性测试：
+
+| 脚本 | 测试内容 | 用法 |
+|---|---|---|
+| `RuntimeUiTest` | 纯 C# 构建：Label/Button/TextField/Slider/Toggle/DropdownField/ProgressBar/ListView + Flex 布局 + 事件回调 + 实时事件日志 | 挂到场景物体（Add Component 搜 "Runtime UI Test"）→ Play |
+| `UxmlUiTest` | UXML/USS **资产**加载：TestLayout.uxml + TestStyle.uss（含 hover/active 状态样式） | 挂到场景物体（Add Component 搜 "Uxml UI Test"）→ Play |
+
+- 两者都自动创建 PanelSettings 并挂载 UIDocument，**无需手工准备资产**
+- 最快路径：菜单 **Tools → Terrain Edit Workflow → Create UI Test Setup**，再进入 Play 模式
+- UXML/USS 来源：Inspector 字段引用（正式用法，打包 Player 必须走此路）；留空时编辑器 Play 模式下自动从本目录加载（AssetDatabase 仅编辑器进程可用）

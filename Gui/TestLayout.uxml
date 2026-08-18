@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:VisualElement class="test-root">
+        <ui:Label text="UXML / USS Asset Test" class="test-title" />
+        <ui:Button text="UXML Button (.test-btn)" class="test-btn" />
+        <ui:TextField label="UXML TextField:" />
+        <ui:Slider label="UXML Slider:" low-value="0" high-value="100" value="30" />
+        <ui:VisualElement class="test-box" />
+    </ui:VisualElement>
+</ui:UXML>
