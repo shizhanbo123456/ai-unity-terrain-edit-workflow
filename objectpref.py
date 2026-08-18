@@ -3,7 +3,7 @@
 """
 ObjectPref 命令行工具 —— 以 JSON 文件保存 / 读取 key-value 字符串信息。
 
-数据文件默认位于本工具上一级的 ObjectPref 目录（即 <Utils>/ObjectPref/objectpref.json），
+数据文件默认位于本工具所在目录（unity-terrain-edit-workflow/objectpref.json），
 保存为 UTF-8 编码的 JSON 对象 {"key": "value", ...}。
 
 JSON 格式保证：
@@ -31,9 +31,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-# 默认数据文件：本脚本所在目录的上一级目录下的 ObjectPref/objectpref.json
-# （py 文件放 Utils/，数据文件放 Utils/ObjectPref/）
-DEFAULT_DATA_FILE = Path(__file__).resolve().parent / "ObjectPref" / "objectpref.json"
+# 默认数据文件：本脚本所在目录下的 objectpref.json
+# （py 文件与数据文件都放在 unity-terrain-edit-workflow/ 根目录）
+DEFAULT_DATA_FILE = Path(__file__).resolve().parent / "objectpref.json"
 
 
 def load_data(data_file: Path) -> dict:

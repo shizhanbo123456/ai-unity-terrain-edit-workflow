@@ -6,10 +6,10 @@ AI 地形编辑工作流 —— 独立工具仓库，存放地形编辑相关的
 
 ```
 Utils/
-├── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
-├── objectpref.py               # ObjectPref 命令行工具（key-value 信息录入/读取）
-└── ObjectPref/
-    └── objectpref.json         # ObjectPref 数据文件（自动创建，JSON 对象 {"key": "value"}）
+└── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
+
+objectpref.py                   # ObjectPref 命令行工具（key-value 信息录入/读取）
+objectpref.json                 # ObjectPref 数据文件（自动创建，JSON 对象 {"key": "value"}）
 ```
 
 ## Utils / UniformPointGenerator
@@ -25,9 +25,9 @@ List<Vector2> UniformPointGenerator.Generate(int count, Vector2 min, Vector2 max
 - 退化边界：区域宽或高为 0 时退化为线/点均匀排布；区域无效（max < min）抛异常
 - 纯静态工具类，不依赖 Unity 命令系统，供本仓库后续工具调用
 
-## Utils / ObjectPref（key-value 信息存储）
+## ObjectPref（key-value 信息存储）
 
-命令行工具，把任意 `(key, value)` 字符串信息以 **JSON 对象**形式存入 `Utils/ObjectPref/objectpref.json`（UTF-8）。纯标准库，零依赖。
+命令行工具，把任意 `(key, value)` 字符串信息以 **JSON 对象**形式存入本目录下的 `objectpref.json`（UTF-8）。纯标准库，零依赖。
 
 ```bash
 # 录入 / 更新（key 已存在时必须显式加 --overwrite，否则报错退出，不会静默覆盖）
