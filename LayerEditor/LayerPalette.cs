@@ -5,19 +5,26 @@ using UnityEngine;
 namespace AiTerrainWorkflow.LayerEditor
 {
     /// <summary>
-    /// 单个绘画图层：颜色 + 可编辑名称。
+    /// 单个绘画图层。
+    /// index 为层级号（固定不可改，0 = 透明层；显示为 "Layer{index}"）；
+    /// label 为可编辑的语义文本（如 "红色"、"过渡(透明)"）。
     /// </summary>
     [System.Serializable]
     public class LayerInfo
     {
+        public int index;
         public Color32 color;
-        public string name;
+        public string label;
 
-        public LayerInfo(Color32 color, string name)
+        public LayerInfo(int index, Color32 color, string label)
         {
+            this.index = index;
             this.color = color;
-            this.name = name;
+            this.label = label;
         }
+
+        /// <summary>完整显示名："Layer{index} {label}"（前缀固定）。</summary>
+        public string DisplayName => $"Layer{index} {label}";
     }
 
     /// <summary>
@@ -62,16 +69,17 @@ namespace AiTerrainWorkflow.LayerEditor
 
         /// <summary>
         /// 生成默认图层列表：第 0 项恒为透明（过渡），随后是 16 个预设色。
+        /// label 初始为颜色名（可编辑）；index 固定（0 透明层，1~16 颜色层）。
         /// </summary>
         public static List<LayerInfo> CreateDefaultLayers()
         {
             var list = new List<LayerInfo>(PresetColorCount + 1)
             {
-                new LayerInfo(Transparent, "Layer0 过渡(透明)"),
+                new LayerInfo(0, Transparent, "过渡(透明)"),
             };
             for (int i = 0; i < PresetColorCount; i++)
             {
-                list.Add(new LayerInfo(PresetColors[i], $"Layer{i + 1} {PresetDefaultNames[i]}"));
+                list.Add(new LayerInfo(i + 1, PresetColors[i], PresetDefaultNames[i]));
             }
             return list;
         }

@@ -305,15 +305,17 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
                 DrawRectOutline(swatchRect, isSelected ? new Color(1f, 0.8f, 0.2f, 1f) : new Color(0f, 0f, 0f, 0.4f), 1f);
 
-                string newName = EditorGUILayout.TextField(layer.name);
-                if (newName != layer.name)
-                    layer.name = newName;
+                // "Layer{index}" 前缀固定不可改，只编辑后面的语义文本（label）
+                EditorGUILayout.LabelField($"Layer{layer.index}", EditorStyles.miniLabel, GUILayout.Width(52));
+                string newLabel = EditorGUILayout.TextField(layer.label);
+                if (newLabel != layer.label)
+                    layer.label = newLabel;
 
                 EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField($"当前层: {_layers[_selectedLayer].name}", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField($"当前层: {_layers[_selectedLayer].DisplayName}", EditorStyles.miniLabel);
         }
 
         // ---------- 鼠标事件 ----------
