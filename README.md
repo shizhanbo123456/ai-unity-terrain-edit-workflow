@@ -9,6 +9,12 @@ Utils/
 ├── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
 └── ObjectGroup.cs              # ObjectGroup ScriptableObject（组名 + GameObject 列表）
 
+LayerEditor/
+├── LayerMap.cs                 # 层图数据：CPU 读写图片 + 圆形/矩形/三角绘制算法（命令行可复用）
+├── LayerPalette.cs             # 图层预设：layer0 透明 + 16 个预设色 + 可编辑名称
+└── Editor/
+    └── LayerEditorWindow.cs    # IMGUI 绘画窗口（Tools / Terrain Edit Workflow / Open Layer Editor）
+
 Editor/
 └── TerrainEditWorkflowMenu.cs  # 菜单栏工具（Tools / Terrain Edit Workflow）
 
@@ -75,5 +81,29 @@ public class ObjectGroup : ScriptableObject
 | 菜单项 | 功能 |
 |---|---|
 | `Tools / Terrain Edit Workflow / Log Version` | Console 打印当前工具版本号 |
+| `Tools / Terrain Edit Workflow / Open Layer Editor` | 打开 LayerEditor 绘画窗口 |
 
-- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.1**）；后续功能有变更时手动同步更新
+- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.2**）；后续功能有变更时手动同步更新
+
+## LayerEditor（多色块区域绘画工具）
+
+编辑器窗口（`Tools / Terrain Edit Workflow / Open Layer Editor`），绘制一张 **CPU 可读写的 RGBA32 图片**，用多个色块表示不同地形区域（如路=黄、水=蓝、森林=绿），为后续 AI 地形编辑提供区域层图。
+
+**工具**（工具栏切换）：
+
+| 工具 | 操作 |
+|---|---|
+| 圆形画笔 | 单击画实心圆；**拖拽画"起点→终点"直线条带**（无自由笔画）；半径可调 |
+| 矩形填充 | 拖拽定义对角区域，抬起时整块填充 |
+| 三角填充 | 依次点击 3 个顶点，第 3 次点击时填充三角形 |
+
+**图层列表**（窗口右侧）：
+- `Layer0` 恒为**透明**——代表过渡区域；选中它绘画即"擦除"为过渡
+- 其余 16 个内置预设色（差别较大），**名称可手动编辑**（如 "Layer1 红色" → "地面"）
+- 绘画时需先选中一个颜色；绘制**完全覆盖**目标像素（alpha=1，无边缘模糊，可覆盖任意旧色）
+
+**其它**：
+- 画布尺寸可设置（8~1024，默认 256×256），"重置画布"重新按新尺寸清空
+- 撤销：Ctrl+Z 或工具栏按钮（最多保留 32 步快照）
+- 导出：保存到 `LayerEditor/Output/LayerMap.png`（固定路径）
+- 核心类 `LayerMap` 不依赖 UnityEditor——后续 bridge 命令行可直接调用同样的绘制算法（圆形/矩形/三角形）
