@@ -39,6 +39,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // 交互状态
         private bool _dragging;
+        private int _canvasHotControl; // 拖拽时锁定事件流，拖出画布仍能收到 MouseDrag/MouseUp
         private Vector2Int _dragStartPx;
         private Vector2Int _dragCurrentPx;
         private readonly List<Vector2Int> _triPoints = new List<Vector2Int>();
@@ -137,9 +138,15 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             EditorGUILayout.BeginHorizontal();
 
-            _canvasRect = GUILayoutUtility.GetRect(100f, 100f,
+            // 画布四周留出边距，避免与窗口/右侧面板贴边
+            const float canvasPadding = 16f;
+            var raw = GUILayoutUtility.GetRect(100f, 100f,
                 GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
-            _canvasRect = new Rect(4f, _canvasRect.y, Mathf.Max(100f, _canvasRect.width - 4f), _canvasRect.height);
+            _canvasRect = new Rect(
+                raw.x + canvasPadding,
+                raw.y + canvasPadding,
+                Mathf.Max(100f, raw.width - canvasPadding * 2f),
+                Mathf.Max(100f, raw.height - canvasPadding * 2f));
 
             EditorGUILayout.BeginVertical(GUILayout.Width(230));
             DrawLayerList();
@@ -336,11 +343,15 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            if (!inCanvas || e.button != 0)
+            if (e.button != 0)
                 return;
 
+            // 按下时必须在画布内；拖拽中（hotControl 已锁定）允许鼠标移出画布
             if (e.type == EventType.MouseDown)
             {
+                if (!inCanvas)
+                    return;
+
                 if (_tool == Tool.TriangleFill)
                 {
                     Vector2Int px = ScreenToPix(e.mousePosition);
@@ -358,6 +369,9 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
                 else
                 {
+                    // 锁定事件流：之后鼠标移出画布也能持续收到 MouseDrag/MouseUp
+                    _canvasHotControl = GUIUtility.GetControlID(FocusType.Passive);
+                    GUIUtility.hotControl = _canvasHotControl;
                     _dragging = true;
                     _dragStartPx = ScreenToPix(e.mousePosition);
                     _dragCurrentPx = _dragStartPx;
@@ -365,13 +379,15 @@ namespace AiTerrainWorkflow.LayerEditor
                     e.Use();
                 }
             }
-            else if (e.type == EventType.MouseDrag && _dragging)
+            else if (e.type == EventType.MouseDrag && _dragging
+                     && GUIUtility.hotControl == _canvasHotControl)
             {
                 _dragCurrentPx = ScreenToPix(e.mousePosition);
                 Repaint();
                 e.Use();
             }
-            else if (e.type == EventType.MouseUp && _dragging)
+            else if (e.type == EventType.MouseUp && _dragging
+                     && GUIUtility.hotControl == _canvasHotControl)
             {
                 _dragCurrentPx = ScreenToPix(e.mousePosition);
                 var color = _layers[_selectedLayer].color;
@@ -390,6 +406,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
 
                 _dragging = false;
+                GUIUtility.hotControl = 0;
                 Repaint();
                 e.Use();
             }
