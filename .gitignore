@@ -1,12 +1,5 @@
-# ObjectPref 本地数据文件（不纳入版本控制）
-# 该文件由 objectpref.py 在运行时写入，保存各项目/机器本地的 key-value 记录。
-# 忽略它可保证单个项目的本地记录不会通过 git 影响到其他人或其他项目。
-objectpref.json
-# 对应的 Unity 元数据也一并忽略（数据文件不跨机器共享，GUID 无需稳定）
-objectpref.json.meta
-
 # LayerEditor 导出产物（不纳入版本控制）
 # 绘画窗口保存到 LayerEditor/Output/ 的层图 PNG 属本地导出产物，
-# 与 objectpref.json 同理不进版本库；.meta 一并忽略。
+# 与代码分离，不进版本库；.meta 一并忽略。
 LayerEditor/Output/
 LayerEditor/Output.meta
