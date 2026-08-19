@@ -1,0 +1,498 @@
+#if UNITY_EDITOR
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace AiTerrainWorkflow.LayerEditor
+{
+    /// <summary>
+    /// 地形贴图核心算法（不依赖 UnityEditor，供编辑器窗口与后续复用）。
+    ///
+    /// 链路：层次图 → 层ID数组 → 组合层级分组 → 欧氏距离场 R（maxD 自动归一化）
+    ///      → 随机游走路网（G 占用/间隔缓冲 + B 路面硬掩码）→ RGB 合成图。
+    ///
+    /// 参数语义见设计文档《混合距离场与路面生成工具_设计文档(2).md》最终版。
+    /// </summary>
+    public static class TerrainRoadGen
+    {
+        // ---------- 层ID解析（颜色 → 层ID，只此一步；颜色信息不再进入后续流程） ----------
+
+        public static int[] ParseLayerIds(Texture2D layerMap, List<LayerConfigSO> layers)
+        {
+            int w = layerMap.width, h = layerMap.height;
+            var src = layerMap.GetPixels32();
+            var ids = new int[w * h];
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var c = src[i];
+                int id = -1;
+                for (int l = 0; l < layers.Count; l++)
+                {
+                    var lc = layers[l].color;
+                    if (lc.r == c.r && lc.g == c.g && lc.b == c.b && lc.a == c.a)
+                    {
+                        id = l;
+                        break;
+                    }
+                }
+                ids[i] = id;
+            }
+            return ids;
+        }
+
+        // ---------- 组合层级分组（adjLayers 传递闭包；仅 generateRoad=true 层参与） ----------
+
+        public static List<List<int>> GroupLayers(List<LayerConfigSO> layers)
+        {
+            int n = layers.Count;
+            var adj = new bool[n, n];
+            for (int i = 0; i < n; i++)
+                adj[i, i] = true;
+            for (int i = 0; i < n; i++)
+            {
+                if (layers[i] == null || !layers[i].generateRoad)
+                    continue;
+                foreach (var j in layers[i].adjLayers)
+                {
+                    if (j >= 0 && j < n && layers[j] != null && layers[j].generateRoad)
+                    {
+                        adj[i, j] = true;
+                        adj[j, i] = true;
+                    }
+                }
+            }
+            // 传递闭包（n 很小，Floyd 足够）
+            for (int k = 0; k < n; k++)
+                for (int i = 0; i < n; i++)
+                    if (adj[i, k])
+                        for (int j = 0; j < n; j++)
+                            if (adj[k, j])
+                                adj[i, j] = true;
+
+            var groups = new List<List<int>>();
+            var visited = new bool[n];
+            for (int i = 0; i < n; i++)
+            {
+                if (visited[i] || layers[i] == null || !layers[i].generateRoad)
+                    continue;
+                var g = new List<int>();
+                for (int j = 0; j < n; j++)
+                {
+                    if (adj[i, j])
+                    {
+                        g.Add(j);
+                        visited[j] = true;
+                    }
+                }
+                g.Sort();
+                groups.Add(g);
+            }
+            return groups;
+        }
+
+        // ---------- 距离场（二值欧氏距离变换 + maxD 归一化） ----------
+
+        /// <summary>
+        /// 计算组合层级的 R 通道：区域内像素到最近区域边界（组外像素）的欧氏距离，
+        /// 用全场最大距离 maxD 归一化到 [0,1]（边界=0，最深内陆=1）；区域外 R=0。
+        /// </summary>
+        public static float[] ComputeR(int[] layerIds, int w, int h, List<int> group, out float maxD)
+        {
+            const float Big = 1e7f; // 前景（区域内）的初始值，远大于任何像素距离平方
+            var frow = new float[w];
+            var tmp = new float[w * h];
+
+            // 行 pass：每行到最近背景（组外）的平方距离
+            for (int y = 0; y < h; y++)
+            {
+                int baseIdx = y * w;
+                for (int x = 0; x < w; x++)
+                    frow[x] = InGroup(layerIds[baseIdx + x], group) ? Big : 0f;
+                var gx = Edt1D(frow);
+                for (int x = 0; x < w; x++)
+                    tmp[baseIdx + x] = gx[x];
+            }
+
+            // 列 pass + 归一化
+            var fcol = new float[h];
+            var r = new float[w * h];
+            maxD = 0f;
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = 0; y < h; y++)
+                    fcol[y] = tmp[y * w + x];
+                var gy = Edt1D(fcol);
+                for (int y = 0; y < h; y++)
+                {
+                    float d = Mathf.Sqrt(Mathf.Max(0f, gy[y]));
+                    int idx = y * w + x;
+                    if (InGroup(layerIds[idx], group))
+                    {
+                        r[idx] = d;
+                        if (d > maxD) maxD = d;
+                    }
+                    else
+                    {
+                        r[idx] = 0f;
+                    }
+                }
+            }
+
+            if (maxD > 0.001f)
+            {
+                for (int i = 0; i < r.Length; i++)
+                    r[i] = Mathf.Clamp01(r[i] / maxD);
+            }
+            return r;
+        }
+
+        /// <summary>1D 平方距离变换（Felzenszwalb & Huttenlocher O(n)）。f[i]=0 为背景，大值代表前景。</summary>
+        private static float[] Edt1D(float[] f)
+        {
+            int n = f.Length;
+            var d = new float[n];
+            var v = new int[n];
+            var z = new float[n + 1];
+            int k = 0;
+            v[0] = 0;
+            z[0] = float.NegativeInfinity;
+            z[1] = float.PositiveInfinity;
+            for (int q = 1; q < n; q++)
+            {
+                float s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+                while (s <= z[k])
+                {
+                    k--;
+                    s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+                }
+                k++;
+                v[k] = q;
+                z[k] = s;
+                z[k + 1] = float.PositiveInfinity;
+            }
+            k = 0;
+            for (int q = 0; q < n; q++)
+            {
+                while (z[k + 1] < q)
+                    k++;
+                float dv = q - v[k];
+                d[q] = dv * dv + f[v[k]];
+            }
+            return d;
+        }
+
+        // ---------- 随机游走（G 占用/间隔 + B 路面掩码） ----------
+
+        /// <summary>
+        /// 在单个组合层级内生成路网：写 G（防卷曲占用缓冲）与 B（路面硬掩码）。
+        /// 所有游走点必须与起点同组合层；候选点跨组直接跳过。
+        /// </summary>
+        public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
+            TerrainPaintConfig cfg, List<LayerConfigSO> layers, float worldPerPixel,
+            out float[] g, out float[] b)
+        {
+            g = new float[w * h];
+            b = new float[w * h];
+            var rng = new System.Random(cfg.walkSeed);
+
+            float stepPx = Mathf.Max(1f, cfg.roadStep / worldPerPixel);
+            float spacingPx = Mathf.Max(1f, cfg.gApplySpacing / worldPerPixel);
+            int candRadiusPx = Mathf.Max(1, Mathf.RoundToInt(stepPx));
+
+            var allPoints = new List<Vector2Int>();
+
+            while (true)
+            {
+                var start = FindStart(layerIds, r, w, h, group, cfg, rng, g);
+                if (start == null)
+                    break;
+                if (CoverageStop(start.Value, w, h, cfg, rng, stepPx, g))
+                    break;
+
+                var path = WalkPath(start.Value, layerIds, r, w, h, group, cfg, layers,
+                    worldPerPixel, stepPx, spacingPx, candRadiusPx, rng, g);
+
+                if (path.Count > 0)
+                {
+                    var last = path[path.Count - 1];
+                    // 闭环合并：末点附近的历史点 → 接入网络
+                    Vector2Int? join = null;
+                    foreach (var p in allPoints)
+                    {
+                        if (Dist(p, last) < stepPx * 2f)
+                        {
+                            join = p;
+                            break;
+                        }
+                    }
+                    if (join.HasValue)
+                    {
+                        path.Add(join.Value);
+                        // 连接段 G 按防卷曲规则补画（沿途各点所在层的 roadSpacingMin）
+                        StampLineFloat(g, w, h, last, join.Value,
+                            idx => GRadiusAt(layerIds, layers, worldPerPixel, idx, spacingPx), 1f);
+                    }
+
+                    // B：路径所有边统一画胶囊（半径 = 边所在层 roadWidth）
+                    for (int i = 0; i + 1 < path.Count; i++)
+                    {
+                        var a = path[i];
+                        var c = path[i + 1];
+                        StampLineFloat(b, w, h, a, c,
+                            idx => BRadiusAt(layerIds, layers, worldPerPixel, idx, stepPx), 1f);
+                    }
+
+                    foreach (var p in path)
+                        allPoints.Add(p);
+                }
+            }
+        }
+
+        private static Vector2Int? FindStart(int[] layerIds, float[] r, int w, int h,
+            List<int> group, TerrainPaintConfig cfg, System.Random rng, float[] g)
+        {
+            for (int t = 0; t < cfg.walkStartTries; t++)
+            {
+                int x = rng.Next(w);
+                int y = rng.Next(h);
+                int idx = y * w + x;
+                if (r[idx] > 0.001f && g[idx] < 0.5f && InGroup(layerIds[idx], group))
+                    return new Vector2Int(x, y);
+            }
+            for (int i = 0; i < r.Length; i++)
+            {
+                if (r[i] > 0.001f && g[i] < 0.5f && InGroup(layerIds[i], group))
+                    return new Vector2Int(i % w, i / w);
+            }
+            return null;
+        }
+
+        private static bool CoverageStop(Vector2Int start, int w, int h,
+            TerrainPaintConfig cfg, System.Random rng, float radiusPx, float[] g)
+        {
+            int n = Mathf.Max(1, cfg.startCoverStopSamples);
+            int radius = Mathf.Max(1, Mathf.RoundToInt(radiusPx));
+            int occupied = 0;
+            for (int i = 0; i < n; i++)
+            {
+                int x = start.x + rng.Next(-radius, radius + 1);
+                int y = start.y + rng.Next(-radius, radius + 1);
+                if (x < 0 || x >= w || y < 0 || y >= h)
+                    continue;
+                if (g[y * w + x] > 0.5f)
+                    occupied++;
+            }
+            return occupied > n / 2;
+        }
+
+        private static List<Vector2Int> WalkPath(Vector2Int start, int[] layerIds, float[] r,
+            int w, int h, List<int> group, TerrainPaintConfig cfg, List<LayerConfigSO> layers,
+            float worldPerPixel, float stepPx, float spacingPx, int candRadiusPx,
+            System.Random rng, float[] g)
+        {
+            var path = new List<Vector2Int> { start };
+            var cur = start;
+            var anchor = start;
+
+            for (int step = 0; step < cfg.maxStepsPerPath; step++)
+            {
+                var cands = SampleCandidates(cur, w, h, cfg, candRadiusPx, rng);
+                var valid = new List<Vector2Int>();
+                foreach (var c in cands)
+                {
+                    int idx = c.y * w + c.x;
+                    if (r[idx] <= 0.001f) continue;
+                    if (!InGroup(layerIds[idx], group)) continue;
+                    if (g[idx] > 0.5f) continue;
+                    if (Dist(c, cur) < stepPx - 0.5f) continue;
+                    valid.Add(c);
+                }
+                if (valid.Count == 0)
+                    break;
+
+                var next = WeightedPick(valid, r, w, rng);
+                path.Add(next);
+
+                // G 应用：与锚点距离超过 gApplySpacing（防卷曲距离）才批量回填 G 胶囊
+                if (Dist(next, anchor) > spacingPx)
+                {
+                    StampLineFloat(g, w, h, anchor, next,
+                        idx => GRadiusAt(layerIds, layers, worldPerPixel, idx, spacingPx), 1f);
+                    anchor = next;
+                }
+                cur = next;
+            }
+            return path;
+        }
+
+        private static List<Vector2Int> SampleCandidates(Vector2Int cur, int w, int h,
+            TerrainPaintConfig cfg, int candRadiusPx, System.Random rng)
+        {
+            var list = new List<Vector2Int>(cfg.walkCandidateCount);
+            for (int i = 0; i < cfg.walkCandidateCount; i++)
+            {
+                double ang = rng.NextDouble() * 2.0 * Math.PI;
+                double rad = Math.Sqrt(rng.NextDouble()) * candRadiusPx;
+                int x = cur.x + (int)Math.Round(Math.Cos(ang) * rad);
+                int y = cur.y + (int)Math.Round(Math.Sin(ang) * rad);
+                if (x >= 0 && x < w && y >= 0 && y < h)
+                    list.Add(new Vector2Int(x, y));
+            }
+            return list;
+        }
+
+        private static Vector2Int WeightedPick(List<Vector2Int> cands, float[] r, int w, System.Random rng)
+        {
+            float total = 0f;
+            foreach (var c in cands)
+                total += Mathf.Max(0.0001f, r[c.y * w + c.x]);
+            double roll = rng.NextDouble() * total;
+            float acc = 0f;
+            foreach (var c in cands)
+            {
+                acc += Mathf.Max(0.0001f, r[c.y * w + c.x]);
+                if (acc >= roll)
+                    return c;
+            }
+            return cands[cands.Count - 1];
+        }
+
+        // ---------- 一键计算（多组合层） ----------
+
+        /// <summary>解析层ID并按全部组合层计算 R/G/B，返回合成 RGB 图。</summary>
+        public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds,
+            out float[] rOut, out float[] gOut, out float[] bOut)
+        {
+            int w = project.layerMap.width;
+            int h = project.layerMap.height;
+            var groups = GroupLayers(project.layers);
+
+            var r = new float[w * h];
+            var g = new float[w * h];
+            var b = new float[w * h];
+            project.groupMaxD = new float[groups.Count];
+
+            for (int gi = 0; gi < groups.Count; gi++)
+            {
+                var group = groups[gi];
+                var rg = ComputeR(layerIds, w, h, group, out float maxD);
+                project.groupMaxD[gi] = maxD;
+                for (int i = 0; i < r.Length; i++)
+                    r[i] = Mathf.Max(r[i], rg[i]);
+
+                GenerateRoads(layerIds, rg, w, h, group, project.config, project.layers,
+                    project.config.worldPerPixel, out var gg, out var bb);
+                for (int i = 0; i < g.Length; i++)
+                {
+                    g[i] = Mathf.Max(g[i], gg[i]);
+                    b[i] = Mathf.Max(b[i], bb[i]);
+                }
+            }
+
+            rOut = r;
+            gOut = g;
+            bOut = b;
+            return ComposeRgb(r, g, b, w, h);
+        }
+
+        /// <summary>合成 RGB 图：R=距离场，G=占用/间隔，B=路面掩码。</summary>
+        public static Texture2D ComposeRgb(float[] r, float[] g, float[] b, int w, int h)
+        {
+            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Point;
+            tex.wrapMode = TextureWrapMode.Clamp;
+            var px = new Color32[w * h];
+            for (int i = 0; i < px.Length; i++)
+            {
+                px[i] = new Color32(
+                    (byte)Mathf.RoundToInt(Mathf.Clamp01(r[i]) * 255f),
+                    (byte)Mathf.RoundToInt(Mathf.Clamp01(g[i]) * 255f),
+                    (byte)Mathf.RoundToInt(Mathf.Clamp01(b[i]) * 255f),
+                    255);
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            return tex;
+        }
+
+        // ---------- 内部工具 ----------
+
+        private static bool InGroup(int id, List<int> group)
+        {
+            if (id < 0)
+                return false;
+            for (int i = 0; i < group.Count; i++)
+            {
+                if (group[i] == id)
+                    return true;
+            }
+            return false;
+        }
+
+        private static float Dist(Vector2Int a, Vector2Int b)
+        {
+            float dx = a.x - b.x;
+            float dy = a.y - b.y;
+            return Mathf.Sqrt(dx * dx + dy * dy);
+        }
+
+        private static float GRadiusAt(int[] layerIds, List<LayerConfigSO> layers, float worldPerPixel, int idx, float fallback)
+        {
+            int id = layerIds[idx];
+            if (id < 0 || id >= layers.Count || layers[id] == null)
+                return fallback;
+            return Mathf.Max(1f, layers[id].roadSpacingMin / worldPerPixel);
+        }
+
+        private static float BRadiusAt(int[] layerIds, List<LayerConfigSO> layers, float worldPerPixel, int idx, float fallback)
+        {
+            int id = layerIds[idx];
+            if (id < 0 || id >= layers.Count || layers[id] == null)
+                return fallback;
+            return Mathf.Max(1f, layers[id].roadWidth / worldPerPixel);
+        }
+
+        /// <summary>沿线盖圆戳写入 float 缓冲（步长 1 像素，半径按沿途各点所在层取值）。</summary>
+        private static void StampLineFloat(float[] buf, int w, int h, Vector2Int a, Vector2Int b,
+            Func<int, float> radiusAt, float value)
+        {
+            float dx = b.x - a.x;
+            float dy = b.y - a.y;
+            float dist = Mathf.Sqrt(dx * dx + dy * dy);
+            if (dist < 0.5f)
+            {
+                StampCircleFloat(buf, w, h, a.x, a.y, radiusAt(a.y * w + a.x), value);
+                return;
+            }
+            int steps = Mathf.Max(1, Mathf.CeilToInt(dist));
+            for (int i = 0; i <= steps; i++)
+            {
+                float t = (float)i / steps;
+                int x = Mathf.RoundToInt(a.x + dx * t);
+                int y = Mathf.RoundToInt(a.y + dy * t);
+                int idx = y * w + x;
+                StampCircleFloat(buf, w, h, x, y, radiusAt(idx), value);
+            }
+        }
+
+        private static void StampCircleFloat(float[] buf, int w, int h, int cx, int cy, float radius, float value)
+        {
+            int r = Mathf.CeilToInt(radius);
+            float r2 = radius * radius;
+            for (int y = cy - r; y <= cy + r; y++)
+            {
+                if (y < 0 || y >= h) continue;
+                int rowBase = y * w;
+                for (int x = cx - r; x <= cx + r; x++)
+                {
+                    if (x < 0 || x >= w) continue;
+                    float ddx = x - cx;
+                    float ddy = y - cy;
+                    if (ddx * ddx + ddy * ddy <= r2)
+                        buf[rowBase + x] = value;
+                }
+            }
+        }
+    }
+}
+#endif

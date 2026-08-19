@@ -73,6 +73,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // 贴图编辑子界面 UI 状态
         private Vector2 _texScroll;
+        private Texture2D _resultPreview;
+        private int[] _layerIdsCache;
 
         private bool HasProject => _project != null;
 
@@ -117,6 +119,8 @@ namespace AiTerrainWorkflow.LayerEditor
             string path = EditorPrefs.GetString(PrefsLastProject, "");
             if (!string.IsNullOrEmpty(path))
                 _project = AssetDatabase.LoadAssetAtPath<TerrainPaintProjectSO>(path);
+            if (_project != null)
+                _resultPreview = _project.resultTexture;
         }
 
         // ---------- 主布局 ----------
@@ -149,6 +153,8 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 SavePaintMapIfAny();
                 _project = newProject;
+                _resultPreview = _project != null ? _project.resultTexture : null;
+                _layerIdsCache = null;
                 RememberProject();
                 Repaint();
             }
@@ -235,6 +241,8 @@ namespace AiTerrainWorkflow.LayerEditor
             _project = project;
             RememberProject();
             _step = WorkflowStep.Config;
+            _resultPreview = null;
+            _layerIdsCache = null;
             Debug.Log($"[Terrain Paint Workflow] 已创建配置: {dirRel}");
             return true;
         }
@@ -288,6 +296,7 @@ namespace AiTerrainWorkflow.LayerEditor
             cfg.maxStepsPerPath = Mathf.Max(1, EditorGUILayout.IntField("Max Steps Per Path", cfg.maxStepsPerPath));
             cfg.gApplySpacing = Mathf.Max(0.01f, EditorGUILayout.FloatField("G Apply Spacing / 防卷曲 (m)", cfg.gApplySpacing));
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
+            cfg.worldPerPixel = Mathf.Max(0.001f, EditorGUILayout.FloatField("World Per Pixel (m/px)", cfg.worldPerPixel));
         }
 
         private void DrawLayerConfig(int index, LayerConfigSO layer)
@@ -410,6 +419,7 @@ namespace AiTerrainWorkflow.LayerEditor
             AssetDatabase.Refresh();
             _project.layerMap = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
             EditorUtility.SetDirty(_project);
+            _layerIdsCache = null;
         }
 
         private void DrawPaintToolbar()
@@ -616,14 +626,68 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawUsageMatrix();
 
             EditorGUILayout.Space(10);
-            EditorGUILayout.LabelField("距离场 / 随机游走（下一阶段实现）", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("距离场 + 路网计算（RGB 三通道）", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "此处将提供：计算混合距离场（R 通道）→ 随机游走生成路网（G/B 通道）→ 三通道预览。\n" +
-                "计算参数取自总 SO 的全局配置与各层级 SO。",
-                MessageType.Info);
+                "点击计算：按组合层级分组 → 距离场 R（maxD 自动归一化）→ 随机游走生成 G/B。\n" +
+                "结果合成一张 RGB 图：R=距离场（红），G=占用/间隔（绿），B=路面掩码（蓝）。",
+                MessageType.None);
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("计算距离场 + 路网", GUILayout.Width(180)))
+                ComputeRgb();
+            if (GUILayout.Button("重新解析层次图", GUILayout.Width(140)))
+                _layerIdsCache = null;
+            EditorGUILayout.EndHorizontal();
+
+            if (_resultPreview != null)
+            {
+                EditorGUILayout.Space(6);
+                float previewW = Mathf.Min(320f, position.width - 40f);
+                float previewH = previewW * (float)_resultPreview.height / Mathf.Max(1, _resultPreview.width);
+                GUILayout.Label(_resultPreview, GUILayout.Width(previewW), GUILayout.Height(previewH));
+            }
 
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
+        }
+
+        private void ComputeRgb()
+        {
+            if (_project.layerMap == null)
+            {
+                EditorUtility.DisplayDialog("计算失败", "尚无层次图。请先在「绘画」子界面绘制并保存层次图。", "确定");
+                return;
+            }
+            if (_project.layers == null || _project.layers.Count == 0)
+            {
+                EditorUtility.DisplayDialog("计算失败", "配置中没有层级（layers 为空）。", "确定");
+                return;
+            }
+
+            int[] ids = _layerIdsCache;
+            if (ids == null || ids.Length != _project.layerMap.width * _project.layerMap.height)
+            {
+                ids = TerrainRoadGen.ParseLayerIds(_project.layerMap, _project.layers);
+                _layerIdsCache = ids;
+            }
+
+            var tex = TerrainRoadGen.ComputeAll(_project, ids, out _, out _, out _);
+
+            // 保存结果图到配置文件夹
+            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(dirRel))
+                return;
+            string fileRel = dirRel + "/result_RGB.png";
+            string full = Path.Combine(Application.dataPath, "..", fileRel);
+            File.WriteAllBytes(full, tex.EncodeToPNG());
+            AssetDatabase.Refresh();
+            _project.resultTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
+            EditorUtility.SetDirty(_project);
+            _resultPreview = _project.resultTexture;
+
+            Debug.Log($"[Terrain Paint Workflow] RGB 计算完成，已保存 {fileRel}" +
+                      $"（{_project.layers.Count} 层 / {_project.groupMaxD?.Length ?? 0} 个组合层）");
+            Repaint();
         }
 
         private void SyncMatrix()

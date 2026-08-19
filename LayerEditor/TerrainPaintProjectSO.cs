@@ -31,6 +31,10 @@ namespace AiTerrainWorkflow.LayerEditor
         [Header("贴图混合")]
         [Tooltip("value-noise 加权混合的空间频率（世界距离）")]
         public float noiseScale = 1f;
+
+        [Header("坐标换算")]
+        [Tooltip("像素 ↔ 世界换算（= Terrain 世界尺寸 / 图片分辨率）；世界距离参数（roadStep/roadWidth 等）除以它转成像素")]
+        public float worldPerPixel = 0.4f;
     }
 
     /// <summary>
@@ -73,6 +77,9 @@ namespace AiTerrainWorkflow.LayerEditor
 
         [HideInInspector, Tooltip("各组合层级的距离场全局最大值（自动计算）")]
         public float[] groupMaxD;
+
+        [Tooltip("计算结果图（RGB：R=距离场，G=占用/间隔，B=路面掩码）")]
+        public Texture2D resultTexture;
     }
 }
 #endif
