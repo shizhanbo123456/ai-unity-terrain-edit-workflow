@@ -2,6 +2,8 @@
 
 AI 地形编辑工作流 —— 独立工具仓库，存放地形编辑相关的算法与工具类。
 
+C# 代码统一使用命名空间 `AiTerrainWorkflow`。
+
 ## 目录结构
 
 ```
@@ -9,77 +11,66 @@ Utils/
 ├── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
 └── ObjectGroup.cs              # ObjectGroup ScriptableObject（组名 + GameObject 列表）
 
-LayerEditor/
-├── LayerMap.cs                 # 层图数据：CPU 读写图片 + 圆形/矩形/三角绘制算法（命令行可复用）
-├── LayerPalette.cs             # 图层预设：layer0 透明 + 16 个预设色 + 可编辑名称
+LayerEditor/                    # 地形贴图工作流（层次图 → 距离场 → 路网 → 贴图）
+├── LayerMap.cs                 # 层图数据：CPU 读写图片 + 圆形/矩形/三角绘制算法
+├── LayerPalette.cs             # 层级预设色：16 个内置色 + 默认名称（创建配置时初始化）
+├── LayerConfigSO.cs            # 每层一个的层级配置 SO（颜色/名称 + 贴图 + 道路参数）
+├── TerrainPaintProjectSO.cs    # 总配置 SO（全局配置 + 16 层级 SO + 层次图 + 矩阵 + 结果）
+├── TerrainRoadGen.cs           # 核心算法：层ID解析/组合分组/距离场R/随机游走G+B/RGB合成
 └── Editor/
-    └── LayerEditorWindow.cs    # IMGUI 绘画窗口（Tools / Terrain Edit Workflow / Open Layer Editor）
+    └── LayerEditorWindow.cs    # 四子界面工作流窗口（Tools / Terrain Edit Workflow / Open Terrain Paint Workflow）
 
 Editor/
 └── TerrainEditWorkflowMenu.cs  # 菜单栏工具（Tools / Terrain Edit Workflow）
 
+TerrainGeneratorConfigs/        # 本地配置资产（每个配置一个子文件夹，全部不进版本库，见 .gitignore）
 ModelFeatures.md                # 模型特征记录（常用预制体的类型/尺寸/外形/方向，供地形搭建参考）
-```
-
-C# 代码统一使用命名空间 `AiTerrainWorkflow`。
-
-## Utils / UniformPointGenerator
-
-在矩形区域 `[min, max]` 内生成 `count` 个均匀分布的随机点（`Vector2`）：
-
-```csharp
-List<Vector2> UniformPointGenerator.Generate(int count, Vector2 min, Vector2 max, int seed = 20260818)
-```
-
-- 网格抖动（分层采样）：区域按宽高比自适应切分 `cols×rows`，每格一点、格内随机偏移 → 全局均匀不聚簇
-- `System.Random(seed)` 确定性伪随机 → 相同 seed 输出逐点一致（缺省 `DefaultSeed = 20260818`）
-- 退化边界：区域宽或高为 0 时退化为线/点均匀排布；区域无效（max < min）抛异常
-- 纯静态工具类，不依赖 Unity 命令系统，供本仓库后续工具调用
-
-## ObjectGroup（ScriptableObject）
-
-一组 GameObject 的命名集合，作为资产保存在 Assets 下：右键 **Create → AiTerrainWorkflow → ObjectGroup**。
-
-```csharp
-public class ObjectGroup : ScriptableObject
-{
-    public string groupName;                 // 组名（如 "Forest Trees"）
-    public List<GameObject> gameObjects;     // 组内 GameObject 列表
-}
 ```
 
 ## 菜单栏工具（Tools / Terrain Edit Workflow）
 
 | 菜单项 | 功能 |
 |---|---|
-| `Tools / Terrain Edit Workflow / Log Version` | Console 打印当前工具版本号 |
-| `Tools / Terrain Edit Workflow / Open Layer Editor` | 打开 LayerEditor 绘画窗口 |
+| `Log Version` | Console 打印当前工具版本号 |
+| `Open Terrain Paint Workflow` | 打开地形贴图工作流窗口 |
 
-- 版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.2**）；后续功能有变更时手动同步更新
+版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.3**）；有变更时手动同步更新。
 
-## LayerEditor（多色块区域绘画工具）
+## 地形贴图工作流窗口（四子界面）
 
-编辑器窗口（`Tools / Terrain Edit Workflow / Open Layer Editor`），绘制一张 **CPU 可读写的 RGBA32 图片**，用多个色块表示不同地形区域（如路=黄、水=蓝、森林=绿），为后续 AI 地形编辑提供区域层图。
+改造自原 LayerEditor 绘画窗口。**窗口本身不存储持久数据**——所有信息从总 SO（`TerrainPaintProjectSO`）加载，修改直接写入 SO；编辑器顶部 ObjectField 选择/创建配置（EditorPrefs 记住上次使用的配置）。
 
-**工具**（工具栏切换）：
-
-| 工具 | 操作 |
+| 子界面 | 功能 |
 |---|---|
-| 圆形画笔 | 单击画实心圆；**拖拽画"起点→终点"直线条带**（无自由笔画）；半径可调 |
-| 矩形填充 | 拖拽定义对角区域，抬起时整块填充 |
-| 三角填充 | 依次点击 3 个顶点，第 3 次点击时填充三角形 |
+| ① 配置修改 | 全局参数（随机游走/贴图混合/坐标换算）+ 逐层参数（贴图列表与种子、generateRoad、roadWidth、roadSpacingMin、roadFinalRemap、adjLayers）。**层名与颜色只读**，需在 Project 面板中修改对应 `LayerConfigSO` 资产 |
+| ② 绘画 | 层次图绘制（圆形画笔/矩形/三角填充 + 擦除；撤销；保存为配置文件夹内 `layerMap.png`）。图层颜色/名称从 16 个层级 SO 读取 |
+| ③ 贴图编辑 | TerrainLayer 列表 + layer×TerrainLayer 矩阵（每格「自然/道路」双复选框）；「计算距离场 + 路网」一键跑完整链路，结果保存为 `result_RGB.png` 并预览 |
+| ④ 应用 | 占位（下一阶段：传入 Terrain，写入 TerrainLayer 并烘焙 splatmap） |
 
-**图层列表**（窗口右侧）：
-- `Layer0` 恒为**透明**——代表过渡区域；选中它绘画即"擦除"为过渡
-- 其余 16 个内置预设色（差别较大），**名称可手动编辑**（如 "Layer1 红色" → "地面"）；`Layer{n}` 前缀固定不可改
-- 绘画时需先选中一个颜色；绘制**完全覆盖**目标像素（alpha=1，无边缘模糊，可覆盖任意旧色）
+**创建新地形配置**：输入名称后自动创建 `TerrainGeneratorConfigs/<名称>/` 子文件夹，内含总 SO + 16 个层级 SO（颜色/名称取 LayerPalette 预设）+ 层次图。
 
-**源图片**（工具栏第二行）：
-- 留空 = 新建画布；设置一张已有 PNG 后，画布从该图加载（尺寸跟随），导出时**直接覆盖原图**
-- 点"重置画布"会清空源图片引用，回到新建模式
+## 配置架构（ScriptableObject）
 
-**其它**：
-- 画布尺寸可设置（8~1024，默认 256×256），"重置画布"重新按新尺寸清空
-- 撤销：Ctrl+Z 或工具栏按钮（最多保留 32 步快照）
-- 导出：设置源图片时覆盖原图；新建模式下保存到 `LayerEditor/Output/`，文件名自动递增（`LayerMap_1.png`、`LayerMap_2.png`…），不覆盖已有文件。Output 目录为本地导出产物，已在 `.gitignore` 中忽略
-- 核心类 `LayerMap` 不依赖 UnityEditor——后续 bridge 命令行可直接调用同样的绘制算法（圆形/矩形/三角形）
+- **总 SO（`TerrainPaintProjectSO`）**：全局配置 `TerrainPaintConfig`（roadStep / walkStartTries / walkCandidateCount / startCoverStopSamples / walkSeed / maxStepsPerPath / gApplySpacing / noiseScale / worldPerPixel）+ 16 个层级 SO 列表 + 层次图 + TerrainLayer 列表 + 矩阵 + 计算结果（groupMaxD、resultTexture）。
+- **层级 SO（`LayerConfigSO`）**：每个层级一个。颜色与名称**只能在 Inspector 修改**；其余参数（自然/道路贴图、生成道路开关、胶囊半径、重映射曲线、邻接层）可在窗口配置修改界面编辑。
+- **存储**：全部配置资产在 `LayerEditor/TerrainGeneratorConfigs/` 下按配置分子文件夹，**本地项目数据，不进版本库**（`.gitignore` 忽略）。
+
+## 核心算法（TerrainRoadGen）
+
+链路（详见桌面设计文档《混合距离场与路面生成工具_设计文档(2).md》）：
+
+1. **层ID解析** `ParseLayerIds`：层次图颜色 → 层ID 整数数组（颜色解析只此一步，后续流程不接触颜色）。
+2. **组合层级分组** `GroupLayers`：以 `adjLayers` 做传递闭包（仅 `generateRoad=true` 层），得到互不相交的组合层级。
+3. **距离场 R** `ComputeR`：对组合层区域做 Felzenszwalb 欧氏距离变换，`maxD` 自动归一化 → R∈[0,1]（边界 0 / 最深内陆 1），区域外 0。
+4. **随机游走** `GenerateRoads`：每个组合层独立生成路网——候选点必须在起点同组合层（跨组跳过）；按 R 加权选点；**防卷曲**（锚点与新点距离 > `gApplySpacing` 才批量回填 G 胶囊，半径 = 沿途所在层 `roadSpacingMin`）；闭环合并（末点附近历史点接入网络）；结束对路径所有边统一填 B 胶囊（半径 = 所在层 `roadWidth`）。G = 占用/间隔缓冲（防绕圈 + 密度控制），B = 路面硬掩码。
+5. **合成** `ComposeRgb`：一张 RGB 图（R=距离场红，G=占用绿，B=路面蓝），结果存 `result_RGB.png`。
+
+参数语义与默认值见设计文档；EDT 算法已独立验证。
+
+## LayerMap（绘制核心类）
+
+CPU 可读写 RGBA32 图片：`FillCircle`（圆形画笔）、`DrawLine`（拖拽直线条带）、`FillRect`（矩形填充）、`FillTriangle`（三角填充）；完全覆盖 alpha=1 不模糊；撤销快照 32 步；`SavePng`/`LoadPng`/`Resize`。不依赖 UnityEditor，供窗口与后续复用。
+
+## ModelFeatures.md
+
+模型特征记录：常用预制体的**类型 / 尺寸 / 外形 / 放置规则**，供 AI 地形搭建摆放时参考。尺寸统一用 bridge `mesh-bounds --placed` 视觉尺寸（x宽 × y高 × z深）。已覆盖 Bonfires / Crystals / Props / Timber / Tower / Tree / Vines / Grass / Rock / Stone&Cliff / Wall。
