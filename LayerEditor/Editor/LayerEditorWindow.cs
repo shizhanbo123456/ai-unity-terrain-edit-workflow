@@ -7,17 +7,18 @@ using UnityEngine;
 namespace AiTerrainWorkflow.LayerEditor
 {
     /// <summary>
-    /// LayerEditor 绘画窗口（IMGUI）。
+    /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 工具（工具栏切换）：
-    ///   圆形画笔  单击画实心圆；拖拽从按下点到抬起点画一条等宽直线条带（无自由笔画）
-    ///   矩形填充  拖拽定义对角区域，抬起时整块填充
-    ///   三角填充  依次点击三个顶点，第三次点击时填充三角形
-    /// 所有绘制完全覆盖目标像素（alpha=1，不模糊）；选中 layer0（透明）即擦除为过渡区域。
-    /// 支持撤销（Ctrl+Z / 工具栏按钮）。
+    /// 四个子界面：
+    ///   ① 配置修改  全局参数（TerrainPaintConfig）+ 逐层参数（LayerConfigSO 的贴图/道路参数；
+    ///                层名与颜色只读，需在 Inspector 中修改对应 SO）
+    ///   ② 绘画      层次图绘制（原 LayerEditor 全部功能；图层颜色/名称从层级 SO 读取）
+    ///   ③ 贴图编辑  TerrainLayer 列表 + layer×TerrainLayer 矩阵（自然/道路双复选框）；距离场/游走计算下阶段实现
+    ///   ④ 应用      占位（下阶段实现：传入 Terrain 并烘焙 splatmap）
     ///
-    /// 源图片字段：设置后从该 PNG 加载画布、导出覆盖原图；留空则新建画布，
-    /// 导出到 Output 目录并以 1、2、3... 递增命名（不覆盖已有文件）。
+    /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
+    /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
+    /// 及其中的总 SO + 16 个层级 SO。
     /// </summary>
     public class LayerEditorWindow : EditorWindow
     {
@@ -28,66 +29,390 @@ namespace AiTerrainWorkflow.LayerEditor
             TriangleFill,
         }
 
-        private const string MenuPath = "Tools/Terrain Edit Workflow/Open Layer Editor";
-        private const string OutputPrefix = "LayerMap_"; // 新建模式导出文件前缀，如 LayerMap_1.png
+        private enum WorkflowStep
+        {
+            Config,
+            Paint,
+            Texture,
+            Apply,
+        }
 
-        private LayerMap _map;
-        private List<LayerInfo> _layers;
-        private int _selectedLayer;
+        /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
+        public const string ConfigRootDirRelative =
+            "Assets/unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
 
-        // 源图片：留空=新建画布；设置=加载该图并覆盖导出
-        private Texture2D _sourceImage;
+        private const string PrefsLastProject = "AiTerrainWorkflow.LastPaintProject";
+        private const int LayerCount = 16;
 
+        private TerrainPaintProjectSO _project;
+        private WorkflowStep _step = WorkflowStep.Config;
+
+        // 创建配置 UI
+        private bool _creating;
+        private string _newConfigName = "";
+
+        // 配置修改子界面 UI 状态
+        private Vector2 _configScroll;
+        private readonly List<bool> _layerFoldouts = new List<bool>();
+
+        // 绘画子界面状态
         private Tool _tool = Tool.CircleBrush;
+        private bool _erase;
         private int _brushRadius = 6;
-
-        // 窗口顶部输入的新尺寸
+        private LayerMap _map;
+        private int _selectedLayer;
         private int _newWidth = 256;
         private int _newHeight = 256;
-
-        // 交互状态
         private bool _dragging;
-        private int _canvasHotControl; // 拖拽时锁定事件流，拖出画布仍能收到 MouseDrag/MouseUp
+        private int _canvasHotControl;
         private Vector2Int _dragStartPx;
         private Vector2Int _dragCurrentPx;
         private readonly List<Vector2Int> _triPoints = new List<Vector2Int>();
-
-        // 画布显示
         private Rect _canvasRect;
         private float _canvasScale = 1f;
+
+        // 贴图编辑子界面 UI 状态
+        private Vector2 _texScroll;
+
+        private bool HasProject => _project != null;
+
+        private Color32 CurrentLayerColor32
+        {
+            get
+            {
+                if (_erase || _project == null || _project.layers.Count == 0)
+                    return LayerPalette.Transparent;
+                return _project.layers[_selectedLayer].color;
+            }
+        }
 
         private Color CurrentLayerColor
         {
             get
             {
-                var c = _layers[_selectedLayer].color;
+                var c = CurrentLayerColor32;
                 return new Color(c.r / 255f, c.g / 255f, c.b / 255f, c.a / 255f);
             }
         }
 
-        [MenuItem(MenuPath)]
+        private string CurrentLayerName
+        {
+            get
+            {
+                if (_project == null || _project.layers.Count == 0)
+                    return "";
+                var l = _project.layers[_selectedLayer];
+                return l != null ? l.layerName : "";
+            }
+        }
+
+        [MenuItem("Tools/Terrain Edit Workflow/Open Terrain Paint Workflow")]
         public static void Open()
         {
-            GetWindow<LayerEditorWindow>("Layer Editor");
+            GetWindow<LayerEditorWindow>("Terrain Paint Workflow");
         }
 
         private void OnEnable()
         {
-            _map = new LayerMap(_newWidth, _newHeight);
-            _layers = LayerPalette.CreateDefaultLayers();
-            _selectedLayer = 0;
+            string path = EditorPrefs.GetString(PrefsLastProject, "");
+            if (!string.IsNullOrEmpty(path))
+                _project = AssetDatabase.LoadAssetAtPath<TerrainPaintProjectSO>(path);
         }
+
+        // ---------- 主布局 ----------
 
         private void OnGUI()
         {
-            DrawToolbar();
+            DrawProjectBar();
+            if (!HasProject)
+            {
+                DrawNoProject();
+                return;
+            }
+
+            switch (_step)
+            {
+                case WorkflowStep.Config: DrawConfigView(); break;
+                case WorkflowStep.Paint: DrawPaintView(); break;
+                case WorkflowStep.Texture: DrawTextureView(); break;
+                case WorkflowStep.Apply: DrawApplyView(); break;
+            }
+        }
+
+        private void DrawProjectBar()
+        {
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            GUILayout.Label("配置", EditorStyles.miniLabel);
+            var newProject = (TerrainPaintProjectSO)EditorGUILayout.ObjectField(
+                _project, typeof(TerrainPaintProjectSO), false, GUILayout.Width(280));
+            if (newProject != _project)
+            {
+                SavePaintMapIfAny();
+                _project = newProject;
+                RememberProject();
+                Repaint();
+            }
+            if (GUILayout.Button("创建新地形配置", EditorStyles.toolbarButton))
+                _creating = !_creating;
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            if (_creating)
+                DrawCreateConfig();
+
+            if (HasProject)
+            {
+                var names = new[] { "配置修改", "绘画", "贴图编辑", "应用" };
+                int newStep = GUILayout.Toolbar((int)_step, names);
+                if (newStep != (int)_step)
+                {
+                    SavePaintMapIfAny();
+                    _step = (WorkflowStep)newStep;
+                }
+                EditorGUILayout.Space(4);
+            }
+        }
+
+        private void DrawCreateConfig()
+        {
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("名称", EditorStyles.miniLabel);
+            _newConfigName = EditorGUILayout.TextField(_newConfigName);
+            if (GUILayout.Button("创建"))
+            {
+                if (TryCreateProject(_newConfigName))
+                    _creating = false;
+            }
+            if (GUILayout.Button("取消"))
+                _creating = false;
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawNoProject()
+        {
+            EditorGUILayout.HelpBox(
+                "未选择地形配置。\n\n请在上方 ObjectField 中选择一个已创建的配置，\n" +
+                "或点击「创建新地形配置」新建一个（会自动创建子文件夹、总 SO 与 16 个层级 SO）。",
+                MessageType.Info);
+        }
+
+        // ---------- 创建配置 ----------
+
+        private bool TryCreateProject(string name)
+        {
+            name = name?.Trim();
+            if (string.IsNullOrEmpty(name))
+            {
+                EditorUtility.DisplayDialog("创建配置", "请输入配置名称", "确定");
+                return false;
+            }
+
+            string dirRel = ConfigRootDirRelative + "/" + name;
+            string dirFull = Path.Combine(Application.dataPath, "..", dirRel);
+            if (Directory.Exists(dirFull))
+            {
+                EditorUtility.DisplayDialog("创建配置", $"已存在同名配置: {name}", "确定");
+                return false;
+            }
+            Directory.CreateDirectory(dirFull);
+
+            var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
+            project.name = name;
+            for (int i = 0; i < LayerCount; i++)
+            {
+                var layer = ScriptableObject.CreateInstance<LayerConfigSO>();
+                layer.color = LayerPalette.PresetColors[i];
+                layer.layerName = LayerPalette.PresetDefaultNames[i];
+                string layerPath = $"{dirRel}/Layer_{i + 1:00}.asset";
+                AssetDatabase.CreateAsset(layer, layerPath);
+                project.layers.Add(layer);
+                project.usageMatrix.Add(new LayerTerrainUsage());
+            }
+            AssetDatabase.CreateAsset(project, $"{dirRel}/{name}.asset");
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            _project = project;
+            RememberProject();
+            _step = WorkflowStep.Config;
+            Debug.Log($"[Terrain Paint Workflow] 已创建配置: {dirRel}");
+            return true;
+        }
+
+        private void RememberProject()
+        {
+            if (_project != null)
+                EditorPrefs.SetString(PrefsLastProject, AssetDatabase.GetAssetPath(_project));
+            else
+                EditorPrefs.DeleteKey(PrefsLastProject);
+        }
+
+        // ---------- ① 配置修改 ----------
+
+        private void EnsureLayerFoldouts()
+        {
+            int n = _project != null ? _project.layers.Count : 0;
+            while (_layerFoldouts.Count < n) _layerFoldouts.Add(false);
+            if (_layerFoldouts.Count > n) _layerFoldouts.RemoveRange(n, _layerFoldouts.Count - n);
+        }
+
+        private void DrawConfigView()
+        {
+            EnsureLayerFoldouts();
+            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+
+            EditorGUILayout.LabelField("全局配置", EditorStyles.boldLabel);
+            DrawGlobalConfig();
+
+            EditorGUILayout.Space(10);
+            EditorGUILayout.LabelField("层级配置（名称/颜色只读，请在 Inspector 修改对应 SO）", EditorStyles.boldLabel);
+            for (int i = 0; i < _project.layers.Count; i++)
+            {
+                var layer = _project.layers[i];
+                if (layer == null) continue;
+                DrawLayerConfig(i, layer);
+            }
+
+            EditorGUILayout.EndScrollView();
+            EditorUtility.SetDirty(_project);
+        }
+
+        private void DrawGlobalConfig()
+        {
+            var cfg = _project.config;
+            cfg.roadStep = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Step (m)", cfg.roadStep));
+            cfg.walkStartTries = Mathf.Max(1, EditorGUILayout.IntField("Walk Start Tries", cfg.walkStartTries));
+            cfg.walkCandidateCount = Mathf.Max(1, EditorGUILayout.IntField("Walk Candidate Count", cfg.walkCandidateCount));
+            cfg.startCoverStopSamples = Mathf.Max(1, EditorGUILayout.IntField("Start Cover Stop Samples", cfg.startCoverStopSamples));
+            cfg.walkSeed = EditorGUILayout.IntField("Walk Seed", cfg.walkSeed);
+            cfg.maxStepsPerPath = Mathf.Max(1, EditorGUILayout.IntField("Max Steps Per Path", cfg.maxStepsPerPath));
+            cfg.gApplySpacing = Mathf.Max(0.01f, EditorGUILayout.FloatField("G Apply Spacing / 防卷曲 (m)", cfg.gApplySpacing));
+            cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
+        }
+
+        private void DrawLayerConfig(int index, LayerConfigSO layer)
+        {
+            EditorGUILayout.BeginHorizontal();
+            bool open = _layerFoldouts[index];
+
+            var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
+            var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+            DrawTinted(swatchRect, c);
+
+            open = EditorGUILayout.Foldout(open, $"Layer{index + 1}  {layer.layerName}", true);
+            _layerFoldouts[index] = open;
+            EditorGUILayout.EndHorizontal();
+
+            if (!open)
+                return;
+
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("颜色 / 名称请在 Inspector 中修改", EditorStyles.miniLabel);
+
+            EditorGUILayout.LabelField("自然地面贴图", EditorStyles.boldLabel);
+            DrawTextureList(layer.naturalTextures, "自然");
+            layer.naturalSeed = EditorGUILayout.IntField("自然贴图种子", layer.naturalSeed);
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField("道路贴图", EditorStyles.boldLabel);
+            DrawTextureList(layer.roadTextures, "道路");
+            layer.roadSeed = EditorGUILayout.IntField("道路贴图种子", layer.roadSeed);
+
+            EditorGUILayout.Space(4);
+            layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
+            layer.roadWidth = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Width (m)", layer.roadWidth));
+            layer.roadSpacingMin = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Spacing Min (m)", layer.roadSpacingMin));
+            layer.roadFinalRemap = EditorGUILayout.CurveField("Road Final Remap", layer.roadFinalRemap);
+
+            EditorGUILayout.LabelField("可邻接层级（组合分组）", EditorStyles.boldLabel);
+            DrawIntList(layer.adjLayers);
+
+            EditorGUILayout.EndVertical();
+            EditorUtility.SetDirty(layer);
+        }
+
+        private void DrawTextureList(List<Texture2D> list, string label)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                list[i] = (Texture2D)EditorGUILayout.ObjectField(
+                    $"{label}[{i}]", list[i], typeof(Texture2D), false);
+                if (GUILayout.Button("-", GUILayout.Width(20)))
+                    list.RemoveAt(i--);
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button($"+ 添加{label}贴图"))
+                list.Add(null);
+        }
+
+        private void DrawIntList(List<int> list)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                list[i] = Mathf.Clamp(EditorGUILayout.IntField($"层级[{i}]", list[i]), 0, LayerCount - 1);
+                if (GUILayout.Button("-", GUILayout.Width(20)))
+                    list.RemoveAt(i--);
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button("+ 添加邻接层"))
+                list.Add(0);
+        }
+
+        // ---------- ② 绘画 ----------
+
+        private void DrawPaintView()
+        {
+            EnsurePaintMap();
+            DrawPaintToolbar();
             DrawCanvasArea();
             HandleCanvasEvents();
         }
 
-        // ---------- 工具栏 ----------
+        private void EnsurePaintMap()
+        {
+            if (_map != null)
+                return;
 
-        private void DrawToolbar()
+            if (_project.layerMap != null)
+            {
+                string path = AssetDatabase.GetAssetPath(_project.layerMap);
+                string full = Path.Combine(Application.dataPath, "..", path);
+                _map = new LayerMap(2, 2);
+                if (_map.LoadPng(full))
+                {
+                    _newWidth = _map.Width;
+                    _newHeight = _map.Height;
+                }
+                else
+                {
+                    Debug.LogWarning($"[Terrain Paint Workflow] 无法加载层次图 {path}，新建空白画布");
+                    _map = new LayerMap(_newWidth, _newHeight);
+                }
+            }
+            else
+            {
+                _map = new LayerMap(_newWidth, _newHeight);
+            }
+        }
+
+        private void SavePaintMapIfAny()
+        {
+            if (_project == null || _map == null)
+                return;
+            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(dirRel))
+                return;
+            string fileRel = dirRel + "/layerMap.png";
+            string full = Path.Combine(Application.dataPath, "..", fileRel);
+            _map.SavePng(full);
+            AssetDatabase.Refresh();
+            _project.layerMap = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
+            EditorUtility.SetDirty(_project);
+        }
+
+        private void DrawPaintToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
@@ -105,6 +430,9 @@ namespace AiTerrainWorkflow.LayerEditor
                 _brushRadius = EditorGUILayout.IntSlider(_brushRadius, 1, 64, GUILayout.Width(120));
             }
 
+            _erase = GUILayout.Toggle(_erase, "擦除", EditorStyles.toolbarButton);
+            GUILayout.Space(8);
+
             GUILayout.FlexibleSpace();
 
             GUILayout.Label("尺寸", EditorStyles.miniLabel);
@@ -113,7 +441,6 @@ namespace AiTerrainWorkflow.LayerEditor
             _newHeight = Mathf.Clamp(EditorGUILayout.IntField(_newHeight, GUILayout.Width(48)), 8, 1024);
             if (GUILayout.Button("重置画布", EditorStyles.toolbarButton))
             {
-                _sourceImage = null; // 重置后按新尺寸新建，脱离源图片
                 _map.Resize(_newWidth, _newHeight);
                 _triPoints.Clear();
                 Repaint();
@@ -121,121 +448,21 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.Space(8);
             if (GUILayout.Button("撤销", EditorStyles.toolbarButton))
-            {
                 _map.Undo();
-            }
-            if (GUILayout.Button("保存 PNG", EditorStyles.toolbarButton))
+            if (GUILayout.Button("保存层次图", EditorStyles.toolbarButton))
             {
-                SavePng();
+                SavePaintMapIfAny();
+                Repaint();
             }
 
             EditorGUILayout.EndHorizontal();
-
-            // 第二行：源图片字段
-            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            GUILayout.Label("源图片（留空=新建）", EditorStyles.miniLabel);
-            var newSource = (Texture2D)EditorGUILayout.ObjectField(
-                _sourceImage, typeof(Texture2D), false, GUILayout.Width(180));
-            if (newSource != _sourceImage)
-            {
-                _sourceImage = newSource;
-                ReloadFromSource();
-            }
-            if (_sourceImage != null)
-            {
-                GUILayout.Space(6);
-                GUILayout.Label("导出将覆盖该图片", EditorStyles.miniLabel);
-            }
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
             EditorGUILayout.Space(4);
         }
-
-        /// <summary>根据源图片加载/新建画布（源图片非空则从 PNG 加载，否则新建）。</summary>
-        private void ReloadFromSource()
-        {
-            if (_map == null)
-                return;
-
-            if (_sourceImage != null)
-            {
-                string assetPath = AssetDatabase.GetAssetPath(_sourceImage);
-                string full = Path.Combine(Application.dataPath, "..", assetPath);
-                if (_map.LoadPng(full))
-                {
-                    _newWidth = _map.Width;
-                    _newHeight = _map.Height;
-                }
-                else
-                {
-                    Debug.LogWarning($"[LayerEditor] 无法从 {assetPath} 加载，已保持当前画布");
-                    _sourceImage = null;
-                }
-            }
-            else
-            {
-                _map.Resize(_newWidth, _newHeight);
-            }
-            _triPoints.Clear();
-            Repaint();
-        }
-
-        private void SavePng()
-        {
-            string relative;
-            if (_sourceImage != null)
-            {
-                // 设置了源图片：覆盖原图
-                relative = AssetDatabase.GetAssetPath(_sourceImage);
-            }
-            else
-            {
-                // 新建模式：Output 目录递增命名，不覆盖已有文件
-                relative = NextOutputRelativePath();
-            }
-
-            string full = Path.Combine(Application.dataPath, "..", relative);
-            _map.SavePng(full);
-            AssetDatabase.Refresh();
-
-            if (_sourceImage != null)
-            {
-                // 覆盖保存后重新导入资产，刷新 Texture2D 引用（避免旧引用失效）
-                _sourceImage = AssetDatabase.LoadAssetAtPath<Texture2D>(relative);
-            }
-            Debug.Log($"[LayerEditor] 已保存: {relative}");
-        }
-
-        /// <summary>
-        /// 计算下一个不冲突的导出路径：扫描 Output 目录下 LayerMap_*.png，
-        /// 取最大序号 +1（如已存在 LayerMap_1.png 则生成 LayerMap_2.png）。
-        /// </summary>
-        private string NextOutputRelativePath()
-        {
-            string dir = Path.Combine(Application.dataPath, "..",
-                LayerMap.DefaultOutputDirRelative);
-            Directory.CreateDirectory(dir);
-
-            int maxIndex = 0;
-            foreach (string file in Directory.GetFiles(dir, OutputPrefix + "*.png"))
-            {
-                string name = Path.GetFileNameWithoutExtension(file); // LayerMap_1
-                string numPart = name.Substring(OutputPrefix.Length);
-                if (int.TryParse(numPart, out int idx) && idx > maxIndex)
-                    maxIndex = idx;
-            }
-
-            return LayerMap.DefaultOutputDirRelative + "/" + OutputPrefix + (maxIndex + 1) + ".png";
-        }
-
-        // ---------- 画布 + 图层列表面板 ----------
 
         private void DrawCanvasArea()
         {
             EditorGUILayout.BeginHorizontal();
 
-            // 画布四周留出边距，避免与窗口/右侧面板贴边
             const float canvasPadding = 16f;
             var raw = GUILayoutUtility.GetRect(100f, 100f,
                 GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
@@ -268,40 +495,55 @@ namespace AiTerrainWorkflow.LayerEditor
                 _canvasRect.y + (_canvasRect.height - dh) * 0.5f,
                 dw, dh);
 
-            // 背景（透明区域显示为深色底，便于看出 layer0）
             DrawTinted(_canvasRect, new Color(0.25f, 0.25f, 0.28f, 1f));
-
-            // 画布本体
             GUI.DrawTexture(drawRect, _map.Texture);
-
-            // 画布边框
             DrawRectOutline(drawRect, new Color(0.8f, 0.8f, 0.8f, 1f), 1f);
-
-            // 交互预览
             DrawInteractionPreview(drawRect);
 
-            // 状态栏提示
             string hint = _tool == Tool.CircleBrush
-                ? "左键单击画圆，拖拽画直线条带"
+                ? (_erase ? "擦除：单击画圆，拖拽画直线条带" : "左键单击画圆，拖拽画直线条带")
                 : _tool == Tool.RectFill
                     ? "左键拖拽定义矩形区域"
                     : "依次点击 3 个顶点（已点 " + _triPoints.Count + " 个）";
             GUI.Label(new Rect(_canvasRect.x, _canvasRect.yMax - 20, _canvasRect.width, 20), hint);
         }
 
-        private void DrawTinted(Rect r, Color color)
+        private void DrawLayerList()
         {
-            GUI.color = color;
-            GUI.DrawTexture(r, EditorGUIUtility.whiteTexture);
-            GUI.color = Color.white;
-        }
+            EditorGUILayout.LabelField("层级（点选绘制）", EditorStyles.boldLabel);
+            EditorGUILayout.Space(2);
 
-        private void DrawRectOutline(Rect r, Color color, float thickness)
-        {
-            DrawTinted(new Rect(r.x, r.y, r.width, thickness), color);
-            DrawTinted(new Rect(r.x, r.yMax - thickness, r.width, thickness), color);
-            DrawTinted(new Rect(r.x, r.y, thickness, r.height), color);
-            DrawTinted(new Rect(r.xMax - thickness, r.y, thickness, r.height), color);
+            for (int i = 0; i < _project.layers.Count; i++)
+            {
+                var layer = _project.layers[i];
+                if (layer == null) continue;
+                bool isSelected = i == _selectedLayer;
+
+                EditorGUILayout.BeginHorizontal();
+
+                bool nowSelected = GUILayout.Toggle(isSelected, GUIContent.none, GUILayout.Width(18));
+                if (nowSelected != isSelected)
+                {
+                    _selectedLayer = i;
+                    _triPoints.Clear();
+                }
+
+                var swatchRect = GUILayoutUtility.GetRect(20, 20, GUILayout.Width(20), GUILayout.Height(20));
+                var swatch = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+                DrawTinted(swatchRect, swatch);
+                DrawRectOutline(swatchRect,
+                    isSelected ? new Color(1f, 0.8f, 0.2f, 1f) : new Color(0f, 0f, 0f, 0.4f), 1f);
+
+                EditorGUILayout.LabelField($"Layer{i + 1}", EditorStyles.miniLabel, GUILayout.Width(52));
+                EditorGUILayout.LabelField(layer.layerName, EditorStyles.miniLabel, GUILayout.Width(130));
+
+                EditorGUILayout.EndHorizontal();
+            }
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField(
+                _erase ? "当前: 擦除（透明）" : $"当前: Layer{_selectedLayer + 1} {CurrentLayerName}",
+                EditorStyles.miniLabel);
         }
 
         private void DrawInteractionPreview(Rect drawRect)
@@ -325,7 +567,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
                 else if (_tool == Tool.CircleBrush)
                 {
-                    // 预览线宽 = 直径（2×radius），与实际 DrawLine 的条带宽一致
                     DrawThickLine(start, cur, _brushRadius * 2f * _canvasScale, color);
                 }
             }
@@ -334,7 +575,6 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 var color = CurrentLayerColor;
                 color.a = 0.5f;
-                // 只显示已点顶点的十字标记，不画顶点间连线
                 for (int i = 0; i < _triPoints.Count; i++)
                 {
                     Vector2 p = PixToScreen(_triPoints[i], drawRect);
@@ -343,9 +583,155 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
+        // ---------- ③ 贴图编辑 ----------
+
+        private void DrawTextureView()
+        {
+            _texScroll = EditorGUILayout.BeginScrollView(_texScroll);
+
+            EditorGUILayout.LabelField("TerrainLayer 列表（贴图矩阵的列）", EditorStyles.boldLabel);
+            for (int i = 0; i < _project.terrainLayers.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                _project.terrainLayers[i] = (TerrainLayer)EditorGUILayout.ObjectField(
+                    $"TerrainLayer[{i}]", _project.terrainLayers[i], typeof(TerrainLayer), false);
+                if (GUILayout.Button("-", GUILayout.Width(20)))
+                {
+                    _project.terrainLayers.RemoveAt(i);
+                    SyncMatrix();
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button("+ 添加 TerrainLayer"))
+            {
+                _project.terrainLayers.Add(null);
+                SyncMatrix();
+            }
+
+            EditorGUILayout.Space(4);
+            if (GUILayout.Button("同步矩阵尺寸（对齐层数与 TerrainLayer 数）"))
+                SyncMatrix();
+
+            EditorGUILayout.Space(8);
+            DrawUsageMatrix();
+
+            EditorGUILayout.Space(10);
+            EditorGUILayout.LabelField("距离场 / 随机游走（下一阶段实现）", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "此处将提供：计算混合距离场（R 通道）→ 随机游走生成路网（G/B 通道）→ 三通道预览。\n" +
+                "计算参数取自总 SO 的全局配置与各层级 SO。",
+                MessageType.Info);
+
+            EditorGUILayout.EndScrollView();
+            EditorUtility.SetDirty(_project);
+        }
+
+        private void SyncMatrix()
+        {
+            if (_project == null)
+                return;
+            int rows = _project.layers.Count;
+            int cols = _project.terrainLayers.Count;
+            while (_project.usageMatrix.Count < rows)
+                _project.usageMatrix.Add(new LayerTerrainUsage());
+            if (_project.usageMatrix.Count > rows)
+                _project.usageMatrix.RemoveRange(rows, _project.usageMatrix.Count - rows);
+            for (int r = 0; r < rows; r++)
+            {
+                var row = _project.usageMatrix[r];
+                if (row == null)
+                {
+                    row = new LayerTerrainUsage();
+                    _project.usageMatrix[r] = row;
+                }
+                ResizeBools(row.natural, cols);
+                ResizeBools(row.road, cols);
+            }
+            EditorUtility.SetDirty(_project);
+        }
+
+        private static void ResizeBools(List<bool> list, int count)
+        {
+            while (list.Count < count) list.Add(false);
+            if (list.Count > count) list.RemoveRange(count, list.Count - count);
+        }
+
+        private void DrawUsageMatrix()
+        {
+            int rows = _project.layers.Count;
+            int cols = _project.terrainLayers.Count;
+            EditorGUILayout.LabelField($"layer × TerrainLayer 矩阵（{rows} 层 × {cols} 列）", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("每格两个复选框：左=自然地面启用，右=道路启用", MessageType.None);
+
+            const float labelW = 110f;
+            const float cellW = 64f;
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Space(labelW);
+            for (int c = 0; c < cols; c++)
+            {
+                var tl = _project.terrainLayers[c];
+                string tn = tl != null ? tl.name : $"TL{c}";
+                EditorGUILayout.LabelField(tn, EditorStyles.miniLabel, GUILayout.Width(cellW));
+            }
+            EditorGUILayout.EndHorizontal();
+
+            for (int r = 0; r < rows; r++)
+            {
+                if (r >= _project.usageMatrix.Count)
+                    break;
+                var row = _project.usageMatrix[r];
+                var layer = r < _project.layers.Count ? _project.layers[r] : null;
+                string rowName = layer != null ? $"{r + 1}.{layer.layerName}" : $"Layer{r + 1}";
+
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField(rowName, EditorStyles.miniLabel, GUILayout.Width(labelW));
+                for (int c = 0; c < cols; c++)
+                {
+                    EditorGUILayout.BeginHorizontal(GUILayout.Width(cellW));
+                    bool n = c < row.natural.Count && row.natural[c];
+                    bool rd = c < row.road.Count && row.road[c];
+                    n = EditorGUILayout.Toggle(n, GUILayout.Width(28));
+                    rd = EditorGUILayout.Toggle(rd, GUILayout.Width(28));
+                    if (c < row.natural.Count) row.natural[c] = n;
+                    if (c < row.road.Count) row.road[c] = rd;
+                    EditorGUILayout.EndHorizontal();
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+        }
+
+        // ---------- ④ 应用（占位） ----------
+
+        private void DrawApplyView()
+        {
+            EditorGUILayout.HelpBox(
+                "「应用」子界面将在下一阶段实现：\n" +
+                "· 传入一个 Terrain\n" +
+                "· 将矩阵中启用的 TerrainLayer 写入 Terrain\n" +
+                "· 按 R/G/B 结果烘焙 splatmap",
+                MessageType.Info);
+        }
+
+        // ---------- 绘画工具函数（沿用原实现） ----------
+
+        private void DrawTinted(Rect r, Color color)
+        {
+            GUI.color = color;
+            GUI.DrawTexture(r, EditorGUIUtility.whiteTexture);
+            GUI.color = Color.white;
+        }
+
+        private void DrawRectOutline(Rect r, Color color, float thickness)
+        {
+            DrawTinted(new Rect(r.x, r.y, r.width, thickness), color);
+            DrawTinted(new Rect(r.x, r.yMax - thickness, r.width, thickness), color);
+            DrawTinted(new Rect(r.x, r.y, thickness, r.height), color);
+            DrawTinted(new Rect(r.xMax - thickness, r.y, thickness, r.height), color);
+        }
+
         private Vector2 PixToScreen(Vector2Int p, Rect drawRect)
         {
-            // 与 ScreenToPix 对称的 y 翻转：像素 y=0（底行）显示在屏幕下方
             return new Vector2(drawRect.x + (p.x + 0.5f) * _canvasScale,
                 drawRect.yMax - (p.y + 0.5f) * _canvasScale);
         }
@@ -375,55 +761,6 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        // ---------- 图层列表 ----------
-
-        private void DrawLayerList()
-        {
-            EditorGUILayout.LabelField("图层（点选颜色绘制）", EditorStyles.boldLabel);
-            EditorGUILayout.Space(2);
-
-            for (int i = 0; i < _layers.Count; i++)
-            {
-                var layer = _layers[i];
-                bool isSelected = i == _selectedLayer;
-
-                EditorGUILayout.BeginHorizontal();
-
-                bool nowSelected = GUILayout.Toggle(isSelected, GUIContent.none, GUILayout.Width(18));
-                if (nowSelected != isSelected)
-                {
-                    _selectedLayer = i;
-                    _triPoints.Clear();
-                }
-
-                var swatchRect = GUILayoutUtility.GetRect(20, 20, GUILayout.Width(20), GUILayout.Height(20));
-                Color swatch = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
-                if (i == 0)
-                {
-                    DrawTinted(swatchRect, new Color(0.7f, 0.7f, 0.7f, 1f));
-                    DrawTinted(swatchRect, new Color(0.4f, 0.4f, 0.4f, 0.5f));
-                }
-                else
-                {
-                    DrawTinted(swatchRect, swatch);
-                }
-                DrawRectOutline(swatchRect, isSelected ? new Color(1f, 0.8f, 0.2f, 1f) : new Color(0f, 0f, 0f, 0.4f), 1f);
-
-                // "Layer{index}" 前缀固定不可改，只编辑后面的语义文本（label）
-                EditorGUILayout.LabelField($"Layer{layer.index}", EditorStyles.miniLabel, GUILayout.Width(52));
-                string newLabel = EditorGUILayout.TextField(layer.label);
-                if (newLabel != layer.label)
-                    layer.label = newLabel;
-
-                EditorGUILayout.EndHorizontal();
-            }
-
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField($"当前层: {_layers[_selectedLayer].DisplayName}", EditorStyles.miniLabel);
-        }
-
-        // ---------- 鼠标事件 ----------
-
         private void HandleCanvasEvents()
         {
             if (_map == null)
@@ -443,7 +780,6 @@ namespace AiTerrainWorkflow.LayerEditor
             if (e.button != 0)
                 return;
 
-            // 按下时必须在画布内；拖拽中（hotControl 已锁定）允许鼠标移出画布
             if (e.type == EventType.MouseDown)
             {
                 if (!inCanvas)
@@ -458,7 +794,7 @@ namespace AiTerrainWorkflow.LayerEditor
                         var a = _triPoints[0];
                         var b = _triPoints[1];
                         var c = _triPoints[2];
-                        _map.FillTriangle(a.x, a.y, b.x, b.y, c.x, c.y, _layers[_selectedLayer].color);
+                        _map.FillTriangle(a.x, a.y, b.x, b.y, c.x, c.y, CurrentLayerColor32);
                         _triPoints.Clear();
                     }
                     Repaint();
@@ -466,7 +802,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
                 else
                 {
-                    // 锁定事件流：之后鼠标移出画布也能持续收到 MouseDrag/MouseUp
                     _canvasHotControl = GUIUtility.GetControlID(FocusType.Passive);
                     GUIUtility.hotControl = _canvasHotControl;
                     _dragging = true;
@@ -487,7 +822,7 @@ namespace AiTerrainWorkflow.LayerEditor
                      && GUIUtility.hotControl == _canvasHotControl)
             {
                 _dragCurrentPx = ScreenToPix(e.mousePosition);
-                var color = _layers[_selectedLayer].color;
+                var color = CurrentLayerColor32;
 
                 if (_tool == Tool.CircleBrush)
                 {
@@ -516,8 +851,6 @@ namespace AiTerrainWorkflow.LayerEditor
             float ox = _canvasRect.x + (_canvasRect.width - dw) * 0.5f;
             float oy = _canvasRect.y + (_canvasRect.height - dh) * 0.5f;
             int px = Mathf.FloorToInt((screen.x - ox) / _canvasScale);
-            // y 翻转：像素数组 y=0 是图片底行（Texture2D 原点在左下），而屏幕 y 向下。
-            // 屏幕顶部(y 小)应对应像素 y 大(图片顶行)，否则显示会垂直镜像。
             int py = h - 1 - Mathf.FloorToInt((screen.y - oy) / _canvasScale);
             px = Mathf.Clamp(px, 0, w - 1);
             py = Mathf.Clamp(py, 0, h - 1);

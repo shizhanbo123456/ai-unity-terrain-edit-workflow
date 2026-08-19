@@ -12,7 +12,7 @@ namespace AiTerrainWorkflow
     public static class TerrainEditWorkflowMenu
     {
     /// <summary>当前工具版本号（有变更时手动更新）。</summary>
-    private const string Version = "v1.2";
+    private const string Version = "v1.3";
 
         /// <summary>菜单前缀（Tools 下拉下）。</summary>
         private const string MenuRoot = "Tools/Terrain Edit Workflow/";
@@ -23,7 +23,7 @@ namespace AiTerrainWorkflow
             Debug.Log($"[Terrain Edit Workflow] {Version}");
         }
 
-        [MenuItem(MenuRoot + "Open Layer Editor")]
+        [MenuItem(MenuRoot + "Open Terrain Paint Workflow")]
         public static void OpenLayerEditor()
         {
             AiTerrainWorkflow.LayerEditor.LayerEditorWindow.Open();
