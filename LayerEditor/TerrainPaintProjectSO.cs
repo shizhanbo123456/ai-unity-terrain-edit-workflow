@@ -44,45 +44,45 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 编辑器窗口的所有信息都从本 SO 加载（窗口本身不存储持久数据）。
     /// TerrainPaintConfig（全局参数）是本 SO 的一部分；层级配置在各自的 LayerConfigSO 中。
     ///
-    /// TerrainLayer 池与贴图种子均在本 SO 中统一管理：
-    ///   - naturalTerrainLayers / roadTerrainLayers：两组独立的 TerrainLayer 池
-    ///   - naturalSeed / roadSeed：全局 value-noise 种子（不细化到层级）
-    /// 每个工作流层（LayerConfigSO）持有两个 int 列表（自然/道路），
-    /// 列表索引 = 对应池的 TerrainLayer id，值 = 该 TL 在贴图混合中的权重（0 = 不纳入）。
+    /// 字段按四个子界面用 Header 划分专属配置：
+    ///   - 区域编辑：层次图（layerMap，绘画画布）
+    ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池
+    ///   - 树木编辑 / 细节编辑：暂无（后续阶段扩展）
     /// </summary>
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]
     public class TerrainPaintProjectSO : ScriptableObject
     {
-        [Tooltip("全局配置（随机游走 / 贴图混合 / 坐标换算）")]
-        public TerrainPaintConfig config = new TerrainPaintConfig();
-
         [Tooltip("全部层级配置（固定 16 个）")]
         public List<LayerConfigSO> layers = new List<LayerConfigSO>();
 
-        [Tooltip("层次图（配置文件夹内资产；绘画子界面的画布）")]
+        // ---------- 区域编辑 ----------
+
+        [Header("区域编辑")]
+        [Tooltip("层次图（配置文件夹内资产；区域编辑子界面的画布）")]
         public Texture2D layerMap;
 
-        // ---------- 自然贴图 TerrainLayer 池 ----------
+        // ---------- 贴图编辑 ----------
 
-        [Header("自然贴图 TerrainLayer 池")]
-        [Tooltip("用于自然地面的 TerrainLayer 列表。各层级 LayerConfigSO.naturalLayerWeights 的索引对应本池。")]
-        public List<TerrainLayer> naturalTerrainLayers = new List<TerrainLayer>();
+        [Header("贴图编辑")]
+        [Tooltip("全局参数（随机游走 / 贴图混合 / 坐标换算）")]
+        public TerrainPaintConfig config = new TerrainPaintConfig();
 
-        // ---------- 道路贴图 TerrainLayer 池 ----------
-
-        [Header("道路贴图 TerrainLayer 池")]
-        [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
-        public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
-
-        // ---------- 全局贴图种子 ----------
-
-        [Header("全局贴图种子")]
         [Tooltip("自然贴图 value-noise 种子（全局，不细化到层级）")]
         public int naturalSeed = 0;
         [Tooltip("道路贴图 value-noise 种子（全局，不细化到层级）")]
         public int roadSeed = 0;
 
-        // ---------- 计算结果 ----------
+        [Tooltip("用于自然地面的 TerrainLayer 列表。各层级 LayerConfigSO.naturalLayerWeights 的索引对应本池。")]
+        public List<TerrainLayer> naturalTerrainLayers = new List<TerrainLayer>();
+
+        [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
+        public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
+
+        // ---------- 树木编辑（暂无） ----------
+
+        // ---------- 细节编辑（暂无） ----------
+
+        // ---------- 计算结果（贴图编辑 · 信息生成） ----------
 
         [HideInInspector, Tooltip("各组合层级的距离场全局最大值（自动计算）")]
         public float[] groupMaxD;

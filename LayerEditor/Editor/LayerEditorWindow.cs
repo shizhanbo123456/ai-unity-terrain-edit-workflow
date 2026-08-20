@@ -9,14 +9,11 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 七个子界面：
-    ///   ① 全局配置  全局参数（TerrainPaintConfig）+ 全局贴图种子 + TerrainLayer 池
-    ///   ② 层级配置  逐层参数（LayerConfigSO 的贴图混合权重/道路参数；层名与颜色只读，需在 Inspector 中修改对应 SO）
-    ///   ③ 区域编辑  层次图绘制（原 LayerEditor 全部功能；图层颜色/名称从层级 SO 读取）
-    ///   ④ 贴图编辑  距离场/路网计算（RGB 三通道）
-    ///   ⑤ 树木编辑  占位（下阶段实现：树木/植被放置）
-    ///   ⑥ 细节编辑  占位（下阶段实现：细节网格/草放置）
-    ///   ⑦ 应用      占位（下阶段实现：传入 Terrain 并烘焙 splatmap）
+    /// 顶层四个子界面（顶部工具栏靠右）：区域编辑 / 贴图编辑 / 树木编辑 / 细节编辑 + 应用按钮。
+    /// 每个子界面内部有三个页签：
+    ///   ① 全局配置  显示全局配置 SO（TerrainPaintProjectSO）中该子界面专属的字段（按 Header 划分）
+    ///   ② 层级配置  显示层级配置 SO（LayerConfigSO）中该子界面专属的字段（逐层折叠）
+    ///   ③ 信息生成  原各子界面的核心功能（区域编辑=画布绘制；贴图编辑=距离场/路网计算；其余占位）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -31,15 +28,21 @@ namespace AiTerrainWorkflow.LayerEditor
             TriangleFill,
         }
 
-        private enum WorkflowStep
+        /// <summary>顶层四个子界面（应用为独立按钮）。</summary>
+        private enum MainTab
         {
-            GlobalConfig,
-            LayerConfig,
             AreaEdit,
             Texture,
             TreeEdit,
             DetailEdit,
-            Apply,
+        }
+
+        /// <summary>子界面内的三个页签。</summary>
+        private enum SubTab
+        {
+            GlobalConfig,
+            LayerConfig,
+            InfoGen,
         }
 
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
@@ -50,13 +53,15 @@ namespace AiTerrainWorkflow.LayerEditor
         private const int LayerCount = 16;
 
         private TerrainPaintProjectSO _project;
-        private WorkflowStep _step = WorkflowStep.GlobalConfig;
+        private MainTab _mainTab = MainTab.AreaEdit;
+        private SubTab _subTab = SubTab.GlobalConfig;
+        private bool _applyMode;
 
         // 创建配置 UI
         private bool _creating;
         private string _newConfigName = "";
 
-        // 配置子界面 UI 状态
+        // 配置页签 UI 状态（全局/层级共用）
         private Vector2 _configScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
 
@@ -139,16 +144,29 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            switch (_step)
+            if (_applyMode)
             {
-                case WorkflowStep.GlobalConfig: DrawGlobalConfigView(); break;
-                case WorkflowStep.LayerConfig: DrawLayerConfigView(); break;
-                case WorkflowStep.AreaEdit: DrawAreaEditView(); break;
-                case WorkflowStep.Texture: DrawTextureView(); break;
-                case WorkflowStep.TreeEdit: DrawTreeEditView(); break;
-                case WorkflowStep.DetailEdit: DrawDetailEditView(); break;
-                case WorkflowStep.Apply: DrawApplyView(); break;
+                DrawApplyView();
+                return;
             }
+
+            DrawSubTabBar();
+            switch (_subTab)
+            {
+                case SubTab.GlobalConfig: DrawGlobalConfigView(); break;
+                case SubTab.LayerConfig: DrawLayerConfigView(); break;
+                case SubTab.InfoGen: DrawInfoGenView(); break;
+            }
+        }
+
+        /// <summary>子界面内的三个页签（全局配置 / 层级配置 / 信息生成）。</summary>
+        private void DrawSubTabBar()
+        {
+            var subNames = new[] { "全局配置", "层级配置", "信息生成" };
+            int newSub = GUILayout.Toolbar((int)_subTab, subNames);
+            if (newSub != (int)_subTab)
+                _subTab = (SubTab)newSub;
+            EditorGUILayout.Space(4);
         }
 
         private void DrawProjectBar()
@@ -168,23 +186,29 @@ namespace AiTerrainWorkflow.LayerEditor
             }
             if (GUILayout.Button("创建新地形配置", EditorStyles.toolbarButton))
                 _creating = !_creating;
+
             GUILayout.FlexibleSpace();
+
+            // 四个子界面切换按钮（靠右）
+            var mainNames = new[] { "区域编辑", "贴图编辑", "树木编辑", "细节编辑" };
+            int newMain = GUILayout.Toolbar((int)_mainTab, mainNames, EditorStyles.toolbarButton);
+            if (newMain != (int)_mainTab)
+            {
+                SavePaintMapIfAny();
+                _mainTab = (MainTab)newMain;
+                _applyMode = false;
+            }
+
+            // 应用按钮（独立，靠右）
+            if (GUILayout.Button(_applyMode ? "应用（返回）" : "应用", EditorStyles.toolbarButton))
+            {
+                SavePaintMapIfAny();
+                _applyMode = !_applyMode;
+            }
             EditorGUILayout.EndHorizontal();
 
             if (_creating)
                 DrawCreateConfig();
-
-            if (HasProject)
-            {
-                var names = new[] { "全局配置", "层级配置", "区域编辑", "贴图编辑", "树木编辑", "细节编辑", "应用" };
-                int newStep = GUILayout.Toolbar((int)_step, names);
-                if (newStep != (int)_step)
-                {
-                    SavePaintMapIfAny();
-                    _step = (WorkflowStep)newStep;
-                }
-                EditorGUILayout.Space(4);
-            }
         }
 
         private void DrawCreateConfig()
@@ -248,7 +272,9 @@ namespace AiTerrainWorkflow.LayerEditor
 
             _project = project;
             RememberProject();
-            _step = WorkflowStep.GlobalConfig;
+            _mainTab = MainTab.AreaEdit;
+            _subTab = SubTab.GlobalConfig;
+            _applyMode = false;
             _resultPreview = null;
             _layerIdsCache = null;
             Debug.Log($"[Terrain Paint Workflow] 已创建配置: {dirRel}");
@@ -263,7 +289,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorPrefs.DeleteKey(PrefsLastProject);
         }
 
-        // ---------- ① 全局配置 ----------
+        // ---------- 配置页签（全局/层级） ----------
 
         private void EnsureLayerFoldouts()
         {
@@ -275,32 +301,102 @@ namespace AiTerrainWorkflow.LayerEditor
         private void DrawGlobalConfigView()
         {
             _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
-
-            EditorGUILayout.LabelField("全局配置", EditorStyles.boldLabel);
-            DrawGlobalConfig();
-
-            EditorGUILayout.Space(10);
-            DrawGlobalTerrainLayers();
-
+            switch (_mainTab)
+            {
+                case MainTab.AreaEdit: DrawAreaGlobalConfig(); break;
+                case MainTab.Texture: DrawTextureGlobalConfig(); break;
+                case MainTab.TreeEdit: DrawEmptyGlobalConfig("树木编辑"); break;
+                case MainTab.DetailEdit: DrawEmptyGlobalConfig("细节编辑"); break;
+            }
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
+        }
+
+        /// <summary>区域编辑 · 全局配置：仅显示层次图（绘画画布）。</summary>
+        private void DrawAreaGlobalConfig()
+        {
+            EditorGUILayout.LabelField("区域编辑 · 全局配置", EditorStyles.boldLabel);
+            _project.layerMap = (Texture2D)EditorGUILayout.ObjectField(
+                "层次图（绘画画布）", _project.layerMap, typeof(Texture2D), false);
+        }
+
+        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池。</summary>
+        private void DrawTextureGlobalConfig()
+        {
+            EditorGUILayout.LabelField("贴图编辑 · 全局配置", EditorStyles.boldLabel);
+            DrawGlobalConfig();
+            EditorGUILayout.Space(10);
+            DrawGlobalTerrainLayers();
+        }
+
+        private void DrawEmptyGlobalConfig(string subName)
+        {
+            EditorGUILayout.LabelField($"{subName} · 全局配置", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox($"「{subName}」暂无专属全局配置，将在后续阶段实现。", MessageType.Info);
         }
 
         private void DrawLayerConfigView()
         {
             EnsureLayerFoldouts();
             _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
-
-            EditorGUILayout.LabelField("层级配置（名称/颜色只读，请在 Inspector 修改对应 SO）", EditorStyles.boldLabel);
-            for (int i = 0; i < _project.layers.Count; i++)
+            switch (_mainTab)
             {
-                var layer = _project.layers[i];
-                if (layer == null) continue;
-                DrawLayerConfig(i, layer);
-            }
+                case MainTab.AreaEdit:
+                    EditorGUILayout.LabelField("层级配置 · 区域编辑（颜色/名称）", EditorStyles.boldLabel);
+                    for (int i = 0; i < _project.layers.Count; i++)
+                    {
+                        var layer = _project.layers[i];
+                        if (layer == null) continue;
+                        DrawAreaLayerConfig(i, layer);
+                    }
+                    break;
 
+                case MainTab.Texture:
+                    EditorGUILayout.LabelField("层级配置 · 贴图编辑", EditorStyles.boldLabel);
+                    for (int i = 0; i < _project.layers.Count; i++)
+                    {
+                        var layer = _project.layers[i];
+                        if (layer == null) continue;
+                        DrawLayerConfig(i, layer);
+                    }
+                    break;
+
+                case MainTab.TreeEdit:
+                    EditorGUILayout.LabelField("层级配置 · 树木编辑", EditorStyles.boldLabel);
+                    EditorGUILayout.HelpBox("「树木编辑」暂无专属层级配置，将在后续阶段实现。", MessageType.Info);
+                    break;
+
+                case MainTab.DetailEdit:
+                    EditorGUILayout.LabelField("层级配置 · 细节编辑", EditorStyles.boldLabel);
+                    EditorGUILayout.HelpBox("「细节编辑」暂无专属层级配置，将在后续阶段实现。", MessageType.Info);
+                    break;
+            }
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
+        }
+
+        /// <summary>区域编辑 · 单个层级的配置：颜色/名称（只读）。</summary>
+        private void DrawAreaLayerConfig(int index, LayerConfigSO layer)
+        {
+            EditorGUILayout.BeginHorizontal();
+            bool open = _layerFoldouts[index];
+
+            var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
+            var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+            DrawTinted(swatchRect, c);
+
+            open = EditorGUILayout.Foldout(open, $"Layer{index + 1}  {layer.layerName}", true);
+            _layerFoldouts[index] = open;
+            EditorGUILayout.EndHorizontal();
+
+            if (!open)
+                return;
+
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("颜色 / 名称（只读，请在 Inspector 中修改对应 SO）", EditorStyles.miniLabel);
+            EditorGUILayout.ColorField("层级颜色", layer.color);
+            EditorGUILayout.TextField("层级名称", layer.layerName);
+            EditorGUILayout.EndVertical();
         }
 
         private void DrawGlobalConfig()
@@ -357,10 +453,9 @@ namespace AiTerrainWorkflow.LayerEditor
             if (!open)
                 return;
 
-            // ① 基础配置
+            // ① 道路生成参数
             EditorGUILayout.BeginVertical("box");
-            EditorGUILayout.LabelField("基础配置", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("颜色 / 名称请在 Inspector 中修改", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("道路生成参数", EditorStyles.boldLabel);
             layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
             layer.roadWidth = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Width (m)", layer.roadWidth));
             layer.roadSpacingMin = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Spacing Min (m)", layer.roadSpacingMin));
@@ -408,7 +503,19 @@ namespace AiTerrainWorkflow.LayerEditor
                 list.Add(0);
         }
 
-        // ---------- ③ 区域编辑 ----------
+        // ---------- ① 区域编辑 ----------
+
+        /// <summary>信息生成页签：按当前子界面分发到对应核心功能。</summary>
+        private void DrawInfoGenView()
+        {
+            switch (_mainTab)
+            {
+                case MainTab.AreaEdit: DrawAreaEditView(); break;
+                case MainTab.Texture: DrawTextureView(); break;
+                case MainTab.TreeEdit: DrawTreeEditView(); break;
+                case MainTab.DetailEdit: DrawDetailEditView(); break;
+            }
+        }
 
         private void DrawAreaEditView()
         {
@@ -632,15 +739,15 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        // ---------- ③ 贴图编辑 ----------
+        // ---------- ② 贴图编辑 ----------
 
         private void DrawTextureView()
         {
             _texScroll = EditorGUILayout.BeginScrollView(_texScroll);
 
             EditorGUILayout.HelpBox(
-                "TerrainLayer 池、贴图种子与层级权重已在「全局配置」「层级配置」子界面中编辑。\n" +
-                "本子界面仅负责距离场 + 路网计算。",
+                "TerrainLayer 池、贴图种子与层级权重请在上方「全局配置」「层级配置」页签中编辑。\n" +
+                "本页签仅负责距离场 + 路网计算。",
                 MessageType.Info);
 
             EditorGUILayout.Space(6);
@@ -772,7 +879,7 @@ namespace AiTerrainWorkflow.LayerEditor
             Repaint();
         }
 
-        // ---------- ⑤ 树木编辑（占位） ----------
+        // ---------- ③ 树木编辑（占位） ----------
 
         private void DrawTreeEditView()
         {
@@ -782,7 +889,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.Info);
         }
 
-        // ---------- ⑥ 细节编辑（占位） ----------
+        // ---------- ④ 细节编辑（占位） ----------
 
         private void DrawDetailEditView()
         {
@@ -792,7 +899,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.Info);
         }
 
-        // ---------- ⑦ 应用（占位） ----------
+        // ---------- 应用（占位） ----------
 
         private void DrawApplyView()
         {

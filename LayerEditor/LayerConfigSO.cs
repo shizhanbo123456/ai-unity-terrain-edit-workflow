@@ -7,31 +7,29 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 单个层级配置（每个层级一个 SO 资产，由总 SO TerrainPaintProjectSO 持有）。
     ///
-    /// 层级数量固定 16 个。**名称与颜色只能在 Inspector 中修改**——
-    /// 编辑器窗口（配置修改 / 绘画子界面）只读取显示，不允许在窗口中改动。
-    /// 其余参数（道路生成、贴图混合权重）可在窗口的「配置修改」子界面编辑。
-    ///
-    /// 贴图混合：本层用到的自然/道路 TerrainLayer 及其权重由
-    /// naturalLayerWeights / roadLayerWeights 两个 int 列表描述——
-    /// 列表索引 = TerrainPaintProjectSO 中对应池的 TerrainLayer id，
-    /// 列表值 = 该 TerrainLayer 在贴图混合中的权重（0 = 不纳入）。
-    /// 全局贴图种子（naturalSeed / roadSeed）在 TerrainPaintProjectSO 中。
+    /// 层级数量固定 16 个。字段按四个子界面用 Header 划分专属配置：
+    ///   - 区域编辑：颜色（层次图该层像素颜色）与名称（语义文本）——只读，需在 Inspector 修改
+    ///   - 贴图编辑：自然/道路 TerrainLayer 权重列表 + 道路生成参数（用于信息生成计算）
+    ///   - 树木编辑 / 细节编辑：暂无（后续阶段扩展）
     /// </summary>
     public class LayerConfigSO : ScriptableObject
     {
-        [Header("标识（仅可在 Inspector 修改）")]
+        // ---------- 区域编辑 ----------
+
+        [Header("区域编辑")]
         [Tooltip("层级颜色（层次图中该层像素的颜色）")]
         public Color32 color;
         [Tooltip("层级名称（语义文本，如 \"草地\"）")]
         public string layerName;
 
-        [Header("贴图混合权重")]
+        // ---------- 贴图编辑 ----------
+
+        [Header("贴图编辑")]
         [Tooltip("自然 TerrainLayer 权重：索引 = TerrainPaintProjectSO.naturalTerrainLayers 池 id，值 = 权重（0 = 不纳入混合）。")]
         public List<int> naturalLayerWeights = new List<int>();
         [Tooltip("道路 TerrainLayer 权重：索引 = TerrainPaintProjectSO.roadTerrainLayers 池 id，值 = 权重（0 = 不纳入混合）。")]
         public List<int> roadLayerWeights = new List<int>();
 
-        [Header("道路生成")]
         [Tooltip("是否生成路面；false → 该层 R 全 0，路不可进入")]
         public bool generateRoad = true;
         [Tooltip("B 胶囊半径（世界距离）")]
@@ -42,6 +40,10 @@ namespace AiTerrainWorkflow.LayerEditor
         public AnimationCurve roadFinalRemap = AnimationCurve.Linear(0f, 0f, 1f, 1f);
         [Tooltip("可邻接层级索引（0 基，用于组合层级分组）")]
         public List<int> adjLayers = new List<int>();
+
+        // ---------- 树木编辑（暂无） ----------
+
+        // ---------- 细节编辑（暂无） ----------
 
         /// <summary>同步自然/道路权重列表长度与两个池对齐（截断或补零）。</summary>
         public void SyncWeightLists(int naturalPoolCount, int roadPoolCount)
