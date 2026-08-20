@@ -342,24 +342,40 @@ namespace AiTerrainWorkflow.LayerEditor
             if (!open)
                 return;
 
+            // ① 基础配置
             EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("基础配置", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("颜色 / 名称请在 Inspector 中修改", EditorStyles.miniLabel);
-
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("贴图混合权重（0 = 不纳入；索引对应全局池）", EditorStyles.boldLabel);
-            DrawWeightList(layer.naturalLayerWeights, _project.naturalTerrainLayers, "自然");
-            DrawWeightList(layer.roadLayerWeights, _project.roadTerrainLayers, "道路");
-
-            EditorGUILayout.Space(4);
             layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
             layer.roadWidth = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Width (m)", layer.roadWidth));
             layer.roadSpacingMin = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Spacing Min (m)", layer.roadSpacingMin));
             layer.roadFinalRemap = EditorGUILayout.CurveField("Road Final Remap", layer.roadFinalRemap);
+            EditorGUILayout.EndVertical();
 
+            EditorGUILayout.Space(2);
+
+            // ② 自然贴图混合权重
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("自然贴图混合权重（0 = 不纳入；索引对应全局池）", EditorStyles.boldLabel);
+            DrawWeightList(layer.naturalLayerWeights, _project.naturalTerrainLayers, "自然");
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(2);
+
+            // ③ 道路贴图混合权重
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("道路贴图混合权重（0 = 不纳入；索引对应全局池）", EditorStyles.boldLabel);
+            DrawWeightList(layer.roadLayerWeights, _project.roadTerrainLayers, "道路");
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(2);
+
+            // ④ 可邻接层级
+            EditorGUILayout.BeginVertical("box");
             EditorGUILayout.LabelField("可邻接层级（组合分组）", EditorStyles.boldLabel);
             DrawIntList(layer.adjLayers);
-
             EditorGUILayout.EndVertical();
+
             EditorUtility.SetDirty(layer);
         }
 
