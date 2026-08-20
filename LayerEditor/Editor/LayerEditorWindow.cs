@@ -54,9 +54,8 @@ namespace AiTerrainWorkflow.LayerEditor
         private bool _creating;
         private string _newConfigName = "";
 
-        // 左侧配置栏 UI 状态（全局配置 / 层级配置 各自独立滚动）
+        // 左栏配置滚动状态（全局配置 + 层级配置 共同滚动）
         private Vector2 _configScroll;
-        private Vector2 _layerConfigScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
 
         // 区域编辑子界面状态
@@ -152,8 +151,8 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>
-        /// 编辑子界面的左右分栏布局：左侧窄栏依次显示全局配置与层级配置（各自独立滚动），
-        /// 右侧宽栏显示信息生成（原各子界面核心功能）。无需页签切换。
+        /// 编辑子界面的左右分栏布局：左侧窄栏为「全局配置 + 层级配置」拼成的整块（共同滚动），
+        /// 右侧宽栏显示信息生成（原各子界面核心功能）。
         /// </summary>
         private void DrawEditSplitView()
         {
@@ -161,11 +160,13 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.BeginHorizontal();
 
-            // 左栏（窄）：全局配置 + 层级配置
+            // 左栏（窄）：全局配置 + 层级配置 拼成一个大滚动区
             EditorGUILayout.BeginVertical(GUILayout.Width(leftWidth));
+            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
             DrawGlobalConfigView();
-            EditorGUILayout.Space(6);
+            EditorGUILayout.Space(8);
             DrawLayerConfigView();
+            EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
 
             // 分隔线
@@ -430,17 +431,13 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private void DrawGlobalConfigView()
         {
-            // 左栏内固定高度（约占窗口 40%），内容超出滚动
-            float h = Mathf.Max(140f, position.height * 0.38f);
-            _configScroll = EditorGUILayout.BeginScrollView(_configScroll, GUILayout.Height(h));
             switch (_mainTab)
             {
                 case MainTab.AreaEdit: DrawAreaGlobalConfig(); break;
                 case MainTab.Texture: DrawTextureGlobalConfig(); break;
-                case MainTab.TreeEdit: DrawEmptyGlobalConfig("树木编辑"); break;
-                case MainTab.DetailEdit: DrawEmptyGlobalConfig("细节编辑"); break;
+                case MainTab.TreeEdit: DrawTreeGlobalConfig(); break;
+                case MainTab.DetailEdit: DrawDetailGlobalConfig(); break;
             }
-            EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
         }
 
@@ -462,17 +459,41 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawGlobalTerrainLayers();
         }
 
-        private void DrawEmptyGlobalConfig(string subName)
+        /// <summary>树木编辑 · 全局配置：树木/植被 Prefab 池。</summary>
+        private void DrawTreeGlobalConfig()
         {
-            EditorGUILayout.LabelField($"{subName} · 全局配置", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox($"「{subName}」暂无专属全局配置，将在后续阶段实现。", MessageType.Info);
+            EditorGUILayout.LabelField("树木编辑 · 全局配置", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("树木 Prefab 池", EditorStyles.boldLabel);
+            DrawPrefabPool(_project.treePrefabs, "树木");
+        }
+
+        /// <summary>细节编辑 · 全局配置：细节网格/草 Prefab 池。</summary>
+        private void DrawDetailGlobalConfig()
+        {
+            EditorGUILayout.LabelField("细节编辑 · 全局配置", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("细节 Prefab 池", EditorStyles.boldLabel);
+            DrawPrefabPool(_project.detailPrefabs, "细节");
+        }
+
+        /// <summary>绘制一个 Prefab 池的编辑列表（带添加/删除按钮）。</summary>
+        private void DrawPrefabPool(List<GameObject> pool, string label)
+        {
+            for (int i = 0; i < pool.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                pool[i] = (GameObject)EditorGUILayout.ObjectField(
+                    $"{label} Prefab[{i}]", pool[i], typeof(GameObject), false);
+                if (GUILayout.Button("-", GUILayout.Width(20)))
+                    pool.RemoveAt(i--);
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button($"+ 添加{label} Prefab"))
+                pool.Add(null);
         }
 
         private void DrawLayerConfigView()
         {
             EnsureLayerFoldouts();
-            // 左栏内弹性高度（占剩余空间），内容超出滚动
-            _layerConfigScroll = EditorGUILayout.BeginScrollView(_layerConfigScroll, GUILayout.ExpandHeight(true));
             switch (_mainTab)
             {
                 case MainTab.AreaEdit:
@@ -505,7 +526,6 @@ namespace AiTerrainWorkflow.LayerEditor
                     EditorGUILayout.HelpBox("「细节编辑」暂无专属层级配置，将在后续阶段实现。", MessageType.Info);
                     break;
             }
-            EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
         }
 

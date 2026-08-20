@@ -47,7 +47,7 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 字段按四个子界面用 Header 划分专属配置：
     ///   - 区域编辑：层次图（layerMap，绘画画布）
     ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池
-    ///   - 树木编辑 / 细节编辑：暂无（后续阶段扩展）
+    ///   - 树木编辑 / 细节编辑：Prefab 池（treePrefabs / detailPrefabs）
     /// </summary>
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]
     public class TerrainPaintProjectSO : ScriptableObject
@@ -83,9 +83,17 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
         public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
 
-        // ---------- 树木编辑（暂无） ----------
+        // ---------- 树木编辑 ----------
 
-        // ---------- 细节编辑（暂无） ----------
+        [Header("树木编辑")]
+        [Tooltip("树木/植被 Prefab 池（树木编辑 · 全局配置中的物理列表）")]
+        public List<GameObject> treePrefabs = new List<GameObject>();
+
+        // ---------- 细节编辑 ----------
+
+        [Header("细节编辑")]
+        [Tooltip("细节网格/草 Prefab 池（细节编辑 · 全局配置中的物理列表）")]
+        public List<GameObject> detailPrefabs = new List<GameObject>();
 
         // ---------- 计算结果（贴图编辑 · 信息生成） ----------
 
