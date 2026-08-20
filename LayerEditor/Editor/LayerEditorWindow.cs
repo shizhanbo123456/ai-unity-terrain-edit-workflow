@@ -560,11 +560,17 @@ namespace AiTerrainWorkflow.LayerEditor
                 pool[i] = (GameObject)EditorGUILayout.ObjectField(
                     $"{label} Prefab[{i}]", pool[i], typeof(GameObject), false);
                 if (GUILayout.Button("-", GUILayout.Width(20)))
+                {
                     pool.RemoveAt(i--);
+                    _project.SyncAllLayerWeights();
+                }
                 EditorGUILayout.EndHorizontal();
             }
             if (GUILayout.Button($"+ 添加{label} Prefab"))
+            {
                 pool.Add(null);
+                _project.SyncAllLayerWeights();
+            }
         }
 
         private void DrawLayerConfigView()
@@ -603,16 +609,112 @@ namespace AiTerrainWorkflow.LayerEditor
                     break;
 
                 case MainTab.TreeEdit:
-                    EditorGUILayout.LabelField("层级配置 · 树木编辑", EditorStyles.boldLabel);
-                    EditorGUILayout.HelpBox("「树木编辑」暂无专属层级配置，将在后续阶段实现。", MessageType.Info);
+                    EditorGUILayout.LabelField("层级配置 · 树木编辑（每层树木生成权重）", EditorStyles.boldLabel);
+                    for (int i = 0; i < _project.layers.Count; i++)
+                    {
+                        var layer = _project.layers[i];
+                        if (layer == null) continue;
+                        DrawTreeLayerConfig(i, layer);
+                    }
                     break;
 
                 case MainTab.DetailEdit:
-                    EditorGUILayout.LabelField("层级配置 · 细节编辑", EditorStyles.boldLabel);
-                    EditorGUILayout.HelpBox("「细节编辑」暂无专属层级配置，将在后续阶段实现。", MessageType.Info);
+                    EditorGUILayout.LabelField("层级配置 · 细节编辑（每层细节生成权重）", EditorStyles.boldLabel);
+                    for (int i = 0; i < _project.layers.Count; i++)
+                    {
+                        var layer = _project.layers[i];
+                        if (layer == null) continue;
+                        DrawDetailLayerConfig(i, layer);
+                    }
                     break;
             }
             EditorUtility.SetDirty(_project);
+        }
+
+        /// <summary>树木编辑 · 单个层级的配置：树木生成权重列表。</summary>
+        private void DrawTreeLayerConfig(int index, LayerConfigSO layer)
+        {
+            EditorGUILayout.BeginHorizontal();
+            bool open = _layerFoldouts[index];
+
+            var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
+            var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+            DrawTinted(swatchRect, c);
+
+            open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
+            _layerFoldouts[index] = open;
+            EditorGUILayout.EndHorizontal();
+
+            if (!open)
+                return;
+
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("树木生成权重（0 = 不生成；索引对应全局树池）", EditorStyles.boldLabel);
+            DrawPrefabWeightList(layer.treeWeights, _project.treePrefabs, "树木");
+            EditorGUILayout.EndVertical();
+            EditorUtility.SetDirty(layer);
+        }
+
+        /// <summary>细节编辑 · 单个层级的配置：细节生成权重列表。</summary>
+        private void DrawDetailLayerConfig(int index, LayerConfigSO layer)
+        {
+            EditorGUILayout.BeginHorizontal();
+            bool open = _layerFoldouts[index];
+
+            var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
+            var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+            DrawTinted(swatchRect, c);
+
+            open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
+            _layerFoldouts[index] = open;
+            EditorGUILayout.EndHorizontal();
+
+            if (!open)
+                return;
+
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("细节生成权重（0 = 不生成；索引对应全局细节池）", EditorStyles.boldLabel);
+            DrawPrefabWeightList(layer.detailWeights, _project.detailPrefabs, "细节");
+            EditorGUILayout.EndVertical();
+            EditorUtility.SetDirty(layer);
+        }
+
+        /// <summary>
+        /// 绘制某层级的 Prefab 生成权重列表：每行 = 池中一个 Prefab（灰色占位缩略图 + 名称 + 权重 IntField）。
+        /// 权重 0 = 该层不生成此 Prefab。占位图暂为灰色，后续接入实际物体图片。
+        /// </summary>
+        private void DrawPrefabWeightList(List<int> weights, List<GameObject> pool, string label)
+        {
+            if (pool.Count == 0)
+            {
+                EditorGUILayout.HelpBox($"{label} Prefab 池为空，请先在全局配置中添加。", MessageType.Info);
+                return;
+            }
+            // 池增删后确保长度对齐
+            while (weights.Count < pool.Count) weights.Add(0);
+            if (weights.Count > pool.Count) weights.RemoveRange(pool.Count, weights.Count - pool.Count);
+
+            const float thumbSize = 28f;
+            for (int i = 0; i < pool.Count; i++)
+            {
+                var prefab = pool[i];
+                string objName = prefab != null ? prefab.name : $"{label}[{i}]";
+
+                EditorGUILayout.BeginHorizontal();
+                // 灰色占位缩略图（后续接入实际物体图片）
+                var thumbRect = GUILayoutUtility.GetRect(thumbSize, thumbSize, GUILayout.Width(thumbSize), GUILayout.Height(thumbSize));
+                DrawTinted(thumbRect, new Color(0.5f, 0.5f, 0.5f, 1f));
+                DrawRectOutline(thumbRect, new Color(0f, 0f, 0f, 0.4f), 1f);
+
+                GUILayout.Space(4);
+                // 名称自动占满剩余宽度（不固定，避免截断）
+                EditorGUILayout.LabelField($"  [{i}] {objName}", EditorStyles.label);
+                GUILayout.FlexibleSpace();
+                GUILayout.Label("权重", EditorStyles.miniLabel, GUILayout.Width(32));
+                // 无 label 前缀的输入框，宽度独立，数值完整可见
+                weights[i] = Mathf.Max(0, EditorGUILayout.IntField(weights[i], GUILayout.Width(64)));
+                EditorGUILayout.EndHorizontal();
+            }
         }
 
         /// <summary>高度编辑 · 单个层级的配置：高度范围（min, max）。</summary>

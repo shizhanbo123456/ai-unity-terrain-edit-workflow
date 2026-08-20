@@ -127,17 +127,19 @@ namespace AiTerrainWorkflow.LayerEditor
         // ---------- 辅助方法 ----------
 
         /// <summary>
-        /// 同步所有层级 SO 的自然/道路权重列表长度，使其与两个池对齐。
-        /// 添加 / 删除 / 重排 TerrainLayer 池后调用（截断或补零）。
+        /// 同步所有层级 SO 的自然/道路/树木/细节权重列表长度，使其与四个池对齐。
+        /// 添加 / 删除 / 重排池元素后调用（截断或补零）。
         /// </summary>
         public void SyncAllLayerWeights()
         {
             int natCount = naturalTerrainLayers.Count;
             int roadCount = roadTerrainLayers.Count;
+            int treeCount = treePrefabs.Count;
+            int detailCount = detailPrefabs.Count;
             foreach (var layer in layers)
             {
                 if (layer == null) continue;
-                layer.SyncWeightLists(natCount, roadCount);
+                layer.SyncWeightLists(natCount, roadCount, treeCount, detailCount);
             }
         }
 

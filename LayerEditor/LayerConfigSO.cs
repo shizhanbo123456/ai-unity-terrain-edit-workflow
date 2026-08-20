@@ -11,7 +11,8 @@ namespace AiTerrainWorkflow.LayerEditor
     ///   - 区域编辑：颜色（层次图该层像素颜色）与名称（语义文本）——只读，需在 Inspector 修改
     ///   - 贴图编辑：自然/道路 TerrainLayer 权重列表 + 道路生成参数（用于信息生成计算）
     ///   - 高度编辑：高度范围（heightRange，烘焙高度图时用）
-    ///   - 树木编辑 / 细节编辑：暂无（后续阶段扩展）
+    ///   - 树木编辑：树木生成权重（treeWeights，索引对应全局树池）
+    ///   - 细节编辑：细节生成权重（detailWeights，索引对应全局细节池）
     /// 注：邻接层级（组合分组）已移至全局配置 TerrainPaintProjectSO.adjacencyGroups。
     /// </summary>
     public class LayerConfigSO : ScriptableObject
@@ -51,11 +52,25 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // ---------- 细节编辑（暂无） ----------
 
-        /// <summary>同步自然/道路权重列表长度与两个池对齐（截断或补零）。</summary>
-        public void SyncWeightLists(int naturalPoolCount, int roadPoolCount)
+        // ---------- 树木编辑 ----------
+
+        [Header("树木编辑")]
+        [Tooltip("树木生成权重：索引 = TerrainPaintProjectSO.treePrefabs 池 id，值 = 权重（0 = 不生成）。")]
+        public List<int> treeWeights = new List<int>();
+
+        // ---------- 细节编辑 ----------
+
+        [Header("细节编辑")]
+        [Tooltip("细节生成权重：索引 = TerrainPaintProjectSO.detailPrefabs 池 id，值 = 权重（0 = 不生成）。")]
+        public List<int> detailWeights = new List<int>();
+
+        /// <summary>同步自然/道路/树木/细节权重列表长度与各池对齐（截断或补零）。</summary>
+        public void SyncWeightLists(int naturalPoolCount, int roadPoolCount, int treePoolCount, int detailPoolCount)
         {
             SyncListLength(naturalLayerWeights, naturalPoolCount);
             SyncListLength(roadLayerWeights, roadPoolCount);
+            SyncListLength(treeWeights, treePoolCount);
+            SyncListLength(detailWeights, detailPoolCount);
         }
 
         private static void SyncListLength(List<int> list, int count)
