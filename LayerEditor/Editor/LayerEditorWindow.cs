@@ -9,15 +9,16 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 顶层四个子界面（顶部工具栏靠右）：区域编辑 / 贴图编辑 / 树木编辑 / 细节编辑 + 应用按钮。
-    /// 每个子界面内部有三个页签：
+    /// 顶层五个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 贴图编辑 / 树木编辑 / 细节编辑。
+    /// 「工作流配置」没有子页签，直接显示：Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）、Terrain 字段（窗口内临时，不入 SO）。
+    /// 其余子界面内部有三个页签：
     ///   ① 全局配置  显示全局配置 SO（TerrainPaintProjectSO）中该子界面专属的字段（按 Header 划分）
     ///   ② 层级配置  显示层级配置 SO（LayerConfigSO）中该子界面专属的字段（逐层折叠）
     ///   ③ 信息生成  原各子界面的核心功能（区域编辑=画布绘制；贴图编辑=距离场/路网计算；其余占位）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
-    /// 及其中的总 SO + 16 个层级 SO。
+    /// 及其中的总 SO + 层级 SO。
     /// </summary>
     public class LayerEditorWindow : EditorWindow
     {
@@ -28,9 +29,10 @@ namespace AiTerrainWorkflow.LayerEditor
             TriangleFill,
         }
 
-        /// <summary>顶层四个子界面（应用为独立按钮）。</summary>
+        /// <summary>顶层五个子界面（工作流配置无子页签）。</summary>
         private enum MainTab
         {
+            WorkflowConfig,
             AreaEdit,
             Texture,
             TreeEdit,
@@ -50,12 +52,13 @@ namespace AiTerrainWorkflow.LayerEditor
             "Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
 
         private const string PrefsLastProject = "AiTerrainWorkflow.LastPaintProject";
-        private const int LayerCount = 16;
 
         private TerrainPaintProjectSO _project;
-        private MainTab _mainTab = MainTab.AreaEdit;
+        private MainTab _mainTab = MainTab.WorkflowConfig;
         private SubTab _subTab = SubTab.GlobalConfig;
-        private bool _applyMode;
+
+        /// <summary>工作流配置中填入的 Terrain（仅窗口内临时，不保存到配置 SO）。</summary>
+        private Terrain _terrainField;
 
         // 创建配置 UI
         private bool _creating;
@@ -92,7 +95,8 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             get
             {
-                if (_erase || _project == null || _project.layers.Count == 0)
+                if (_erase || _project == null || _project.layers.Count == 0
+                    || _selectedLayer < 0 || _selectedLayer >= _project.layers.Count)
                     return LayerPalette.Transparent;
                 return _project.layers[_selectedLayer].color;
             }
@@ -111,7 +115,8 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             get
             {
-                if (_project == null || _project.layers.Count == 0)
+                if (_project == null || _project.layers.Count == 0
+                    || _selectedLayer < 0 || _selectedLayer >= _project.layers.Count)
                     return "";
                 var l = _project.layers[_selectedLayer];
                 return l != null ? l.layerName : "";
@@ -144,9 +149,10 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            if (_applyMode)
+            // 工作流配置：无子页签，直接显示
+            if (_mainTab == MainTab.WorkflowConfig)
             {
-                DrawApplyView();
+                DrawWorkflowConfigView();
                 return;
             }
 
@@ -189,21 +195,13 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.FlexibleSpace();
 
-            // 四个子界面切换按钮（靠右）
-            var mainNames = new[] { "区域编辑", "贴图编辑", "树木编辑", "细节编辑" };
+            // 五个子界面切换按钮（靠右）
+            var mainNames = new[] { "工作流配置", "区域编辑", "贴图编辑", "树木编辑", "细节编辑" };
             int newMain = GUILayout.Toolbar((int)_mainTab, mainNames, EditorStyles.toolbarButton);
             if (newMain != (int)_mainTab)
             {
                 SavePaintMapIfAny();
                 _mainTab = (MainTab)newMain;
-                _applyMode = false;
-            }
-
-            // 应用按钮（独立，靠右）
-            if (GUILayout.Button(_applyMode ? "应用（返回）" : "应用", EditorStyles.toolbarButton))
-            {
-                SavePaintMapIfAny();
-                _applyMode = !_applyMode;
             }
             EditorGUILayout.EndHorizontal();
 
@@ -256,14 +254,10 @@ namespace AiTerrainWorkflow.LayerEditor
 
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name;
-            for (int i = 0; i < LayerCount; i++)
+            // 默认创建上限数量的层（Layer0 透明 + 其余颜色层），可在工作流配置中调整
+            for (int i = 0; i < TerrainPaintProjectSO.MaxLayerCount; i++)
             {
-                var layer = ScriptableObject.CreateInstance<LayerConfigSO>();
-                layer.color = LayerPalette.PresetColors[i];
-                layer.layerName = LayerPalette.PresetDefaultNames[i];
-                string layerPath = $"{dirRel}/Layer_{i + 1:00}.asset";
-                AssetDatabase.CreateAsset(layer, layerPath);
-                project.layers.Add(layer);
+                project.layers.Add(CreateLayerSO(i, dirRel));
             }
             project.SyncAllLayerWeights();
             AssetDatabase.CreateAsset(project, $"{dirRel}/{name}.asset");
@@ -272,13 +266,34 @@ namespace AiTerrainWorkflow.LayerEditor
 
             _project = project;
             RememberProject();
-            _mainTab = MainTab.AreaEdit;
+            _mainTab = MainTab.WorkflowConfig;
             _subTab = SubTab.GlobalConfig;
-            _applyMode = false;
             _resultPreview = null;
             _layerIdsCache = null;
             Debug.Log($"[Terrain Paint Workflow] 已创建配置: {dirRel}");
             return true;
+        }
+
+        /// <summary>
+        /// 创建单个层级 SO：index 0 为完全透明过渡层（颜色锁定），其余按 LayerPalette 预设色初始化。
+        /// </summary>
+        private static LayerConfigSO CreateLayerSO(int index, string dirRel)
+        {
+            var layer = ScriptableObject.CreateInstance<LayerConfigSO>();
+            if (index == 0)
+            {
+                layer.color = LayerPalette.Transparent;
+                layer.layerName = "过渡(透明)";
+            }
+            else
+            {
+                int preset = Mathf.Min(index - 1, LayerPalette.PresetColors.Length - 1);
+                layer.color = LayerPalette.PresetColors[preset];
+                layer.layerName = LayerPalette.PresetDefaultNames[preset];
+            }
+            string layerPath = $"{dirRel}/Layer_{index:00}.asset";
+            AssetDatabase.CreateAsset(layer, layerPath);
+            return layer;
         }
 
         private void RememberProject()
@@ -287,6 +302,107 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorPrefs.SetString(PrefsLastProject, AssetDatabase.GetAssetPath(_project));
             else
                 EditorPrefs.DeleteKey(PrefsLastProject);
+        }
+
+        // ---------- 工作流配置（无子页签） ----------
+
+        private void DrawWorkflowConfigView()
+        {
+            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+
+            EditorGUILayout.LabelField("工作流配置", EditorStyles.boldLabel);
+
+            // Layer 数量（2~16）
+            int newCount = Mathf.Clamp(
+                EditorGUILayout.IntField("Layer 数量", _project.layers.Count),
+                TerrainPaintProjectSO.MinLayerCount, TerrainPaintProjectSO.MaxLayerCount);
+            if (newCount != _project.layers.Count)
+            {
+                ResizeLayers(newCount);
+                Repaint();
+            }
+            EditorGUILayout.HelpBox(
+                $"Layer0 为完全透明过渡层（颜色不可编辑）；其余层级可编辑颜色与名称。数量范围 {TerrainPaintProjectSO.MinLayerCount}~{TerrainPaintProjectSO.MaxLayerCount}。",
+                MessageType.None);
+
+            EditorGUILayout.Space(6);
+
+            // 各层颜色/名称编辑
+            for (int i = 0; i < _project.layers.Count; i++)
+            {
+                var layer = _project.layers[i];
+                if (layer == null) continue;
+
+                EditorGUILayout.BeginHorizontal();
+                var swatchRect = GUILayoutUtility.GetRect(20, 20, GUILayout.Width(20), GUILayout.Height(20));
+                var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f,
+                    layer.color.a / 255f);
+                DrawTinted(swatchRect, c);
+                DrawRectOutline(swatchRect, new Color(0f, 0f, 0f, 0.4f), 1f);
+
+                EditorGUILayout.LabelField($"Layer{i}", EditorStyles.miniLabel, GUILayout.Width(52));
+
+                if (i == 0)
+                {
+                    // Layer0：颜色锁定为完全透明，仅名称可编辑
+                    EditorGUILayout.LabelField("透明（锁定）", EditorStyles.miniLabel, GUILayout.Width(90));
+                    layer.layerName = EditorGUILayout.TextField(layer.layerName);
+                }
+                else
+                {
+                    var newColor = EditorGUILayout.ColorField(GUIContent.none, layer.color, false, true, false, GUILayout.Width(60));
+                    if (newColor != (Color)layer.color)
+                        layer.color = (Color32)newColor;
+                    layer.layerName = EditorGUILayout.TextField(layer.layerName);
+                }
+                EditorGUILayout.EndHorizontal();
+                EditorUtility.SetDirty(layer);
+            }
+
+            EditorGUILayout.Space(8);
+
+            // Terrain 字段（窗口内临时，不入 SO）
+            EditorGUILayout.LabelField("目标 Terrain（仅本次窗口会话，不保存到配置）", EditorStyles.boldLabel);
+            _terrainField = (Terrain)EditorGUILayout.ObjectField(
+                "Terrain", _terrainField, typeof(Terrain), true);
+
+            EditorGUILayout.EndScrollView();
+            EditorUtility.SetDirty(_project);
+        }
+
+        /// <summary>调整 Layer 数量：增层创建新 SO（末尾追加），减层删除末尾 SO 资产。</summary>
+        private void ResizeLayers(int newCount)
+        {
+            if (_project == null) return;
+
+            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(dirRel)) return;
+
+            while (_project.layers.Count < newCount)
+            {
+                int idx = _project.layers.Count;
+                _project.layers.Add(CreateLayerSO(idx, dirRel));
+            }
+            while (_project.layers.Count > newCount)
+            {
+                int lastIdx = _project.layers.Count - 1;
+                var last = _project.layers[lastIdx];
+                if (last != null)
+                {
+                    string assetPath = AssetDatabase.GetAssetPath(last);
+                    if (!string.IsNullOrEmpty(assetPath))
+                        AssetDatabase.DeleteAsset(assetPath);
+                }
+                _project.layers.RemoveAt(lastIdx);
+            }
+
+            _project.SyncAllLayerWeights();
+            _selectedLayer = Mathf.Clamp(_selectedLayer, 0, Mathf.Max(0, _project.layers.Count - 1));
+            EnsureLayerFoldouts();
+            EditorUtility.SetDirty(_project);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log($"[Terrain Paint Workflow] Layer 数量调整为 {newCount}");
         }
 
         // ---------- 配置页签（全局/层级） ----------
@@ -320,10 +436,13 @@ namespace AiTerrainWorkflow.LayerEditor
                 "层次图（绘画画布）", _project.layerMap, typeof(Texture2D), false);
         }
 
-        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池。</summary>
+        /// <summary>贴图编辑 · 全局配置：RGB 结果图 + 随机游走参数 + 全局种子 + TerrainLayer 池。</summary>
         private void DrawTextureGlobalConfig()
         {
             EditorGUILayout.LabelField("贴图编辑 · 全局配置", EditorStyles.boldLabel);
+            _project.resultTexture = (Texture2D)EditorGUILayout.ObjectField(
+                "计算结果图（RGB）", _project.resultTexture, typeof(Texture2D), false);
+            EditorGUILayout.Space(10);
             DrawGlobalConfig();
             EditorGUILayout.Space(10);
             DrawGlobalTerrainLayers();
@@ -385,7 +504,7 @@ namespace AiTerrainWorkflow.LayerEditor
             var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
             DrawTinted(swatchRect, c);
 
-            open = EditorGUILayout.Foldout(open, $"Layer{index + 1}  {layer.layerName}", true);
+            open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
             _layerFoldouts[index] = open;
             EditorGUILayout.EndHorizontal();
 
@@ -446,7 +565,7 @@ namespace AiTerrainWorkflow.LayerEditor
             var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
             DrawTinted(swatchRect, c);
 
-            open = EditorGUILayout.Foldout(open, $"Layer{index + 1}  {layer.layerName}", true);
+            open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
             _layerFoldouts[index] = open;
             EditorGUILayout.EndHorizontal();
 
@@ -494,7 +613,7 @@ namespace AiTerrainWorkflow.LayerEditor
             for (int i = 0; i < list.Count; i++)
             {
                 EditorGUILayout.BeginHorizontal();
-                list[i] = Mathf.Clamp(EditorGUILayout.IntField($"层级[{i}]", list[i]), 0, LayerCount - 1);
+                list[i] = Mathf.Clamp(EditorGUILayout.IntField($"层级[{i}]", list[i]), 0, _project.layers.Count - 1);
                 if (GUILayout.Button("-", GUILayout.Width(20)))
                     list.RemoveAt(i--);
                 EditorGUILayout.EndHorizontal();
@@ -690,7 +809,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 DrawRectOutline(swatchRect,
                     isSelected ? new Color(1f, 0.8f, 0.2f, 1f) : new Color(0f, 0f, 0f, 0.4f), 1f);
 
-                EditorGUILayout.LabelField($"Layer{i + 1}", EditorStyles.miniLabel, GUILayout.Width(52));
+                EditorGUILayout.LabelField($"Layer{i}", EditorStyles.miniLabel, GUILayout.Width(52));
                 EditorGUILayout.LabelField(layer.layerName, EditorStyles.miniLabel, GUILayout.Width(130));
 
                 EditorGUILayout.EndHorizontal();
@@ -698,7 +817,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField(
-                _erase ? "当前: 擦除（透明）" : $"当前: Layer{_selectedLayer + 1} {CurrentLayerName}",
+                _erase ? "当前: 擦除（透明）" : $"当前: Layer{_selectedLayer} {CurrentLayerName}",
                 EditorStyles.miniLabel);
         }
 
@@ -896,18 +1015,6 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.HelpBox(
                 "「细节编辑」子界面将在下一阶段实现：\n" +
                 "· 细节网格/草放置与配置",
-                MessageType.Info);
-        }
-
-        // ---------- 应用（占位） ----------
-
-        private void DrawApplyView()
-        {
-            EditorGUILayout.HelpBox(
-                "「应用」子界面将在下一阶段实现：\n" +
-                "· 传入一个 Terrain\n" +
-                "· 将矩阵中启用的 TerrainLayer 写入 Terrain\n" +
-                "· 按 R/G/B 结果烘焙 splatmap",
                 MessageType.Info);
         }
 

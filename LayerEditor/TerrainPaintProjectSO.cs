@@ -39,7 +39,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
     /// <summary>
     /// 地形贴图工作流的总配置 SO。一个配置 = TerrainGeneratorConfigs 下的一个子文件夹，
-    /// 内含：本总 SO + 16 个层级 SO（layers）+ 层次图（layerMap）。
+    /// 内含：本总 SO + 若干层级 SO（layers，数量 2~16）+ 层次图（layerMap）。
     ///
     /// 编辑器窗口的所有信息都从本 SO 加载（窗口本身不存储持久数据）。
     /// TerrainPaintConfig（全局参数）是本 SO 的一部分；层级配置在各自的 LayerConfigSO 中。
@@ -52,7 +52,12 @@ namespace AiTerrainWorkflow.LayerEditor
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]
     public class TerrainPaintProjectSO : ScriptableObject
     {
-        [Tooltip("全部层级配置（固定 16 个）")]
+        /// <summary>Layer 数量下限（含 Layer0 透明层）。</summary>
+        public const int MinLayerCount = 2;
+        /// <summary>Layer 数量上限（含 Layer0 透明层）。</summary>
+        public const int MaxLayerCount = 16;
+
+        [Tooltip("全部层级配置（Layer0 为完全透明过渡层，其余为可编辑颜色/名称的层级；数量 2~16）")]
         public List<LayerConfigSO> layers = new List<LayerConfigSO>();
 
         // ---------- 区域编辑 ----------
