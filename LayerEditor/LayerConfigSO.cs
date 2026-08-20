@@ -10,6 +10,7 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 层级数量 2~16（Layer0 恒为透明过渡层）。字段按四个子界面用 Header 划分专属配置：
     ///   - 区域编辑：颜色（层次图该层像素颜色）与名称（语义文本）——只读，需在 Inspector 修改
     ///   - 贴图编辑：自然/道路 TerrainLayer 权重列表 + 道路生成参数（用于信息生成计算）
+    ///   - 高度编辑：高度范围（heightRange，烘焙高度图时用）
     ///   - 树木编辑 / 细节编辑：暂无（后续阶段扩展）
     /// 注：邻接层级（组合分组）已移至全局配置 TerrainPaintProjectSO.adjacencyGroups。
     /// </summary>
@@ -39,6 +40,12 @@ namespace AiTerrainWorkflow.LayerEditor
         public float roadSpacingMin = 4f;
         [Tooltip("烘焙时对 R 的重映射曲线（不作用于 B）")]
         public AnimationCurve roadFinalRemap = AnimationCurve.Linear(0f, 0f, 1f, 1f);
+
+        // ---------- 高度编辑 ----------
+
+        [Header("高度编辑")]
+        [Tooltip("该层级的预期高度范围 (min, max)。烘焙高度图时，噪声在该范围内插值生成高度值。")]
+        public Vector2 heightRange = new Vector2(0f, 1f);
 
         // ---------- 树木编辑（暂无） ----------
 

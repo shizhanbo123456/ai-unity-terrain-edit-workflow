@@ -9,11 +9,11 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 顶层五个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 贴图编辑 / 树木编辑 / 细节编辑。
+    /// 顶层六个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 树木编辑 / 细节编辑。
     /// 「工作流配置」整页显示：工作流图（层次图/RGB 图）、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）、Terrain 字段（窗口内临时，不入 SO）。
     /// 其余编辑子界面为左右分栏布局：
-    ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠）
-    ///   右栏（宽）：信息生成（原各子界面核心功能：区域编辑=画布绘制；贴图编辑=距离场/路网计算；其余占位）
+    ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠），整体共同滚动
+    ///   右栏（宽）：信息生成（区域编辑=画布绘制；高度编辑=烘焙高度图；贴图编辑=距离场/路网计算；其余占位）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -28,11 +28,12 @@ namespace AiTerrainWorkflow.LayerEditor
             TriangleFill,
         }
 
-        /// <summary>顶层五个子界面（工作流配置无子页签）。</summary>
+        /// <summary>顶层六个子界面（工作流配置无子页签）。</summary>
         private enum MainTab
         {
             WorkflowConfig,
             AreaEdit,
+            HeightEdit,
             Texture,
             TreeEdit,
             DetailEdit,
@@ -202,8 +203,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.FlexibleSpace();
 
-            // 五个子界面切换按钮（靠右）
-            var mainNames = new[] { "工作流配置", "区域编辑", "贴图编辑", "树木编辑", "细节编辑" };
+            // 六个子界面切换按钮（靠右）
+            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "贴图编辑", "树木编辑", "细节编辑" };
             int newMain = GUILayout.Toolbar((int)_mainTab, mainNames, EditorStyles.toolbarButton);
             if (newMain != (int)_mainTab)
             {
@@ -434,6 +435,7 @@ namespace AiTerrainWorkflow.LayerEditor
             switch (_mainTab)
             {
                 case MainTab.AreaEdit: DrawAreaGlobalConfig(); break;
+                case MainTab.HeightEdit: DrawHeightGlobalConfig(); break;
                 case MainTab.Texture: DrawTextureGlobalConfig(); break;
                 case MainTab.TreeEdit: DrawTreeGlobalConfig(); break;
                 case MainTab.DetailEdit: DrawDetailGlobalConfig(); break;
@@ -448,6 +450,21 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.HelpBox(
                 "区域编辑无专属全局配置；层次图（绘画画布）已在「工作流配置」页面中管理。",
                 MessageType.Info);
+        }
+
+        /// <summary>高度编辑 · 全局配置：噪声 seed / scale + 烘焙结果（min/max/高度图）。</summary>
+        private void DrawHeightGlobalConfig()
+        {
+            EditorGUILayout.LabelField("高度编辑 · 全局配置", EditorStyles.boldLabel);
+            _project.heightSeed = EditorGUILayout.IntField("高度 Seed", _project.heightSeed);
+            _project.heightScale = Mathf.Max(0.001f, EditorGUILayout.FloatField("高度 Scale（噪声频率）", _project.heightScale));
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField($"高度 Min: {_project.heightMin:F2}");
+            EditorGUILayout.LabelField($"高度 Max: {_project.heightMax:F2}");
+            _project.heightMap = (Texture2D)EditorGUILayout.ObjectField(
+                "高度图", _project.heightMap, typeof(Texture2D), false);
         }
 
         /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池 + 邻接组。</summary>
@@ -561,6 +578,16 @@ namespace AiTerrainWorkflow.LayerEditor
                     }
                     break;
 
+                case MainTab.HeightEdit:
+                    EditorGUILayout.LabelField("层级配置 · 高度编辑（每层高度范围）", EditorStyles.boldLabel);
+                    for (int i = 0; i < _project.layers.Count; i++)
+                    {
+                        var layer = _project.layers[i];
+                        if (layer == null) continue;
+                        DrawHeightLayerConfig(i, layer);
+                    }
+                    break;
+
                 case MainTab.Texture:
                     EditorGUILayout.LabelField("层级配置 · 贴图编辑", EditorStyles.boldLabel);
                     for (int i = 0; i < _project.layers.Count; i++)
@@ -582,6 +609,31 @@ namespace AiTerrainWorkflow.LayerEditor
                     break;
             }
             EditorUtility.SetDirty(_project);
+        }
+
+        /// <summary>高度编辑 · 单个层级的配置：高度范围（min, max）。</summary>
+        private void DrawHeightLayerConfig(int index, LayerConfigSO layer)
+        {
+            EditorGUILayout.BeginHorizontal();
+            bool open = _layerFoldouts[index];
+
+            var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
+            var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+            DrawTinted(swatchRect, c);
+
+            open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
+            _layerFoldouts[index] = open;
+            EditorGUILayout.EndHorizontal();
+
+            if (!open)
+                return;
+
+            EditorGUILayout.BeginVertical("box");
+            var range = EditorGUILayout.Vector2Field("高度范围 (min, max)", layer.heightRange);
+            if (range.x > range.y) range.y = range.x; // 保证 min <= max
+            layer.heightRange = range;
+            EditorGUILayout.EndVertical();
+            EditorUtility.SetDirty(layer);
         }
 
         /// <summary>区域编辑 · 单个层级的配置：颜色/名称（只读）。</summary>
@@ -698,10 +750,90 @@ namespace AiTerrainWorkflow.LayerEditor
             switch (_mainTab)
             {
                 case MainTab.AreaEdit: DrawAreaEditView(); break;
+                case MainTab.HeightEdit: DrawHeightEditView(); break;
                 case MainTab.Texture: DrawTextureView(); break;
                 case MainTab.TreeEdit: DrawTreeEditView(); break;
                 case MainTab.DetailEdit: DrawDetailEditView(); break;
             }
+        }
+
+        // ---------- 高度编辑（信息生成） ----------
+
+        private void DrawHeightEditView()
+        {
+            EditorGUILayout.LabelField("高度图烘焙", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "逐像素按所在层级的高度范围，用 Perlin 噪声（seed + scale）在该范围内插值生成高度数组；\n" +
+                "实际 min/max 自动写入全局配置，数组归一化后写入高度图 R 通道。\n" +
+                "恢复公式：h = r * (max - min) + min（r 为 R 通道归一化值 [0,1]）。",
+                MessageType.None);
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("烘焙高度图", GUILayout.Width(160)))
+                BakeHeightMap();
+            if (GUILayout.Button("清空高度图", GUILayout.Width(120)))
+            {
+                _project.heightMap = null;
+                _project.heightMin = 0f;
+                _project.heightMax = 0f;
+                EditorUtility.SetDirty(_project);
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (_project.heightMap != null)
+            {
+                EditorGUILayout.Space(6);
+                float previewW = Mathf.Min(320f, position.width * 0.5f - 40f);
+                float previewH = previewW * (float)_project.heightMap.height / Mathf.Max(1, _project.heightMap.width);
+                GUILayout.Label(_project.heightMap, GUILayout.Width(previewW), GUILayout.Height(previewH));
+                EditorGUILayout.LabelField(
+                    $"当前范围: [{_project.heightMin:F2}, {_project.heightMax:F2}]", EditorStyles.miniLabel);
+            }
+        }
+
+        /// <summary>烘焙高度图：生成噪声高度数组 → 记录 min/max → 归一化写入 R 通道 → 保存 PNG。</summary>
+        private void BakeHeightMap()
+        {
+            if (_project.layerMap == null)
+            {
+                EditorUtility.DisplayDialog("烘焙失败", "尚无层次图。请先在「区域编辑」中绘制并保存层次图。", "确定");
+                return;
+            }
+            if (_project.layers == null || _project.layers.Count == 0)
+            {
+                EditorUtility.DisplayDialog("烘焙失败", "配置中没有层级。", "确定");
+                return;
+            }
+
+            int w = _project.layerMap.width;
+            int h = _project.layerMap.height;
+            int[] ids = _layerIdsCache;
+            if (ids == null || ids.Length != w * h)
+            {
+                ids = TerrainRoadGen.ParseLayerIds(_project.layerMap, _project.layers);
+                _layerIdsCache = ids;
+            }
+
+            var tex = TerrainRoadGen.BakeHeightMap(_project, ids, w, h);
+            if (tex == null)
+            {
+                EditorUtility.DisplayDialog("烘焙失败", "高度图生成失败，请查看 Console 日志。", "确定");
+                return;
+            }
+
+            // 保存到配置文件夹
+            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(dirRel))
+                return;
+            string fileRel = dirRel + "/heightMap.png";
+            string full = Path.Combine(Application.dataPath, "..", fileRel);
+            File.WriteAllBytes(full, tex.EncodeToPNG());
+            Object.DestroyImmediate(tex);
+            AssetDatabase.Refresh();
+            _project.heightMap = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
+            EditorUtility.SetDirty(_project);
+            Debug.Log($"[Terrain Paint Workflow] 高度图烘焙完成，已保存 {fileRel}，范围 [{_project.heightMin:F2}, {_project.heightMax:F2}]");
+            Repaint();
         }
 
         private void DrawAreaEditView()

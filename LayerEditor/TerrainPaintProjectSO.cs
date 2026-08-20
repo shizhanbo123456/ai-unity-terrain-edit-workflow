@@ -46,7 +46,8 @@ namespace AiTerrainWorkflow.LayerEditor
     ///
     /// 字段按四个子界面用 Header 划分专属配置：
     ///   - 区域编辑：层次图（layerMap，绘画画布）
-    ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池
+    ///   - 高度编辑：heightSeed / heightScale / heightMin / heightMax / heightMap
+    ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
     ///   - 树木编辑 / 细节编辑：Prefab 池（treePrefabs / detailPrefabs）
     /// </summary>
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]
@@ -85,6 +86,20 @@ namespace AiTerrainWorkflow.LayerEditor
 
         [Tooltip("邻接组（组合层级分组）：每个组是一个层级索引列表，如 {{1,2,3},{4,5}}。同一层级不可出现在多个组中（会校验报错）。")]
         public List<List<int>> adjacencyGroups = new List<List<int>>();
+
+        // ---------- 高度编辑 ----------
+
+        [Header("高度编辑")]
+        [Tooltip("烘焙高度图用的噪声种子")]
+        public int heightSeed = 0;
+        [Tooltip("烘焙高度图用的噪声空间频率（越大噪声变化越快）")]
+        public float heightScale = 1f;
+        [HideInInspector, Tooltip("烘焙高度图时自动写入的实际高度最小/最大值")]
+        public float heightMin;
+        [HideInInspector, Tooltip("烘焙高度图时自动写入的实际高度最小/最大值")]
+        public float heightMax;
+        [Tooltip("高度图（归一化高度写入 R 通道；恢复公式 h = r*(max-min)+min）")]
+        public Texture2D heightMap;
 
         // ---------- 树木编辑 ----------
 

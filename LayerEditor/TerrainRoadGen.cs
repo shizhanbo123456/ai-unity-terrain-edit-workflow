@@ -422,6 +422,69 @@ namespace AiTerrainWorkflow.LayerEditor
             return tex;
         }
 
+        // ---------- 高度图烘焙（高度编辑子界面） ----------
+
+        /// <summary>
+        /// 烘焙高度图：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成高度数组；
+        /// 统计实际 min/max 写入 project.heightMin/heightMax；归一化后写入返回纹理的 R 通道。
+        /// 恢复公式：h = r * (max - min) + min（r 为 R 通道归一化值 [0,1]）。
+        /// </summary>
+        public static Texture2D BakeHeightMap(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
+        {
+            if (layerIds == null || layerIds.Length != w * h)
+            {
+                Debug.LogError("[Terrain Road Gen] 烘焙高度图失败：layerIds 与尺寸不匹配");
+                return null;
+            }
+
+            float scale = Mathf.Max(0.001f, project.heightScale);
+            float seedOff = project.heightSeed * 13.37f;
+
+            var heights = new float[w * h];
+            float hmin = float.MaxValue;
+            float hmax = float.MinValue;
+
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    int i = y * w + x;
+                    int lid = layerIds[i];
+                    Vector2 range = (lid >= 0 && lid < project.layers.Count && project.layers[lid] != null)
+                        ? project.layers[lid].heightRange
+                        : new Vector2(0f, 0f);
+
+                    // Perlin 噪声（seed 偏移 + 空间频率 scale），在层级高度范围内插值
+                    float n = Mathf.PerlinNoise(x * scale + seedOff, y * scale + seedOff);
+                    heights[i] = Mathf.Lerp(range.x, range.y, n);
+
+                    if (heights[i] < hmin) hmin = heights[i];
+                    if (heights[i] > hmax) hmax = heights[i];
+                }
+            }
+
+            // 防除零：范围过小时强制拉开
+            if (hmax - hmin < 0.0001f)
+                hmax = hmin + 1f;
+
+            project.heightMin = hmin;
+            project.heightMax = hmax;
+
+            // 归一化 → R 通道
+            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Point;
+            tex.wrapMode = TextureWrapMode.Clamp;
+            var px = new Color32[w * h];
+            for (int i = 0; i < px.Length; i++)
+            {
+                float r = (heights[i] - hmin) / (hmax - hmin);
+                px[i] = new Color32((byte)Mathf.RoundToInt(Mathf.Clamp01(r) * 255f), 0, 0, 255);
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            return tex;
+        }
+
         // ---------- 内部工具 ----------
 
         private static bool InGroup(int id, List<int> group)
