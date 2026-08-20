@@ -9,12 +9,14 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 五个子界面：
+    /// 七个子界面：
     ///   ① 全局配置  全局参数（TerrainPaintConfig）+ 全局贴图种子 + TerrainLayer 池
     ///   ② 层级配置  逐层参数（LayerConfigSO 的贴图混合权重/道路参数；层名与颜色只读，需在 Inspector 中修改对应 SO）
-    ///   ③ 绘画      层次图绘制（原 LayerEditor 全部功能；图层颜色/名称从层级 SO 读取）
+    ///   ③ 区域编辑  层次图绘制（原 LayerEditor 全部功能；图层颜色/名称从层级 SO 读取）
     ///   ④ 贴图编辑  距离场/路网计算（RGB 三通道）
-    ///   ⑤ 应用      占位（下阶段实现：传入 Terrain 并烘焙 splatmap）
+    ///   ⑤ 树木编辑  占位（下阶段实现：树木/植被放置）
+    ///   ⑥ 细节编辑  占位（下阶段实现：细节网格/草放置）
+    ///   ⑦ 应用      占位（下阶段实现：传入 Terrain 并烘焙 splatmap）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -33,8 +35,10 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             GlobalConfig,
             LayerConfig,
-            Paint,
+            AreaEdit,
             Texture,
+            TreeEdit,
+            DetailEdit,
             Apply,
         }
 
@@ -56,7 +60,7 @@ namespace AiTerrainWorkflow.LayerEditor
         private Vector2 _configScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
 
-        // 绘画子界面状态
+        // 区域编辑子界面状态
         private Tool _tool = Tool.CircleBrush;
         private bool _erase;
         private int _brushRadius = 6;
@@ -139,8 +143,10 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 case WorkflowStep.GlobalConfig: DrawGlobalConfigView(); break;
                 case WorkflowStep.LayerConfig: DrawLayerConfigView(); break;
-                case WorkflowStep.Paint: DrawPaintView(); break;
+                case WorkflowStep.AreaEdit: DrawAreaEditView(); break;
                 case WorkflowStep.Texture: DrawTextureView(); break;
+                case WorkflowStep.TreeEdit: DrawTreeEditView(); break;
+                case WorkflowStep.DetailEdit: DrawDetailEditView(); break;
                 case WorkflowStep.Apply: DrawApplyView(); break;
             }
         }
@@ -170,7 +176,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             if (HasProject)
             {
-                var names = new[] { "全局配置", "层级配置", "绘画", "贴图编辑", "应用" };
+                var names = new[] { "全局配置", "层级配置", "区域编辑", "贴图编辑", "树木编辑", "细节编辑", "应用" };
                 int newStep = GUILayout.Toolbar((int)_step, names);
                 if (newStep != (int)_step)
                 {
@@ -402,9 +408,9 @@ namespace AiTerrainWorkflow.LayerEditor
                 list.Add(0);
         }
 
-        // ---------- ② 绘画 ----------
+        // ---------- ③ 区域编辑 ----------
 
-        private void DrawPaintView()
+        private void DrawAreaEditView()
         {
             EnsurePaintMap();
             DrawPaintToolbar();
@@ -731,7 +737,7 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             if (_project.layerMap == null)
             {
-                EditorUtility.DisplayDialog("计算失败", "尚无层次图。请先在「绘画」子界面绘制并保存层次图。", "确定");
+                EditorUtility.DisplayDialog("计算失败", "尚无层次图。请先在「区域编辑」子界面绘制并保存层次图。", "确定");
                 return;
             }
             if (_project.layers == null || _project.layers.Count == 0)
@@ -766,7 +772,27 @@ namespace AiTerrainWorkflow.LayerEditor
             Repaint();
         }
 
-        // ---------- ④ 应用（占位） ----------
+        // ---------- ⑤ 树木编辑（占位） ----------
+
+        private void DrawTreeEditView()
+        {
+            EditorGUILayout.HelpBox(
+                "「树木编辑」子界面将在下一阶段实现：\n" +
+                "· 树木/植被放置与配置",
+                MessageType.Info);
+        }
+
+        // ---------- ⑥ 细节编辑（占位） ----------
+
+        private void DrawDetailEditView()
+        {
+            EditorGUILayout.HelpBox(
+                "「细节编辑」子界面将在下一阶段实现：\n" +
+                "· 细节网格/草放置与配置",
+                MessageType.Info);
+        }
+
+        // ---------- ⑦ 应用（占位） ----------
 
         private void DrawApplyView()
         {
@@ -778,7 +804,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.Info);
         }
 
-        // ---------- 绘画工具函数（沿用原实现） ----------
+        // ---------- 区域编辑工具函数（沿用原实现） ----------
 
         private void DrawTinted(Rect r, Color color)
         {
