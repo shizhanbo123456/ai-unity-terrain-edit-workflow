@@ -677,7 +677,7 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>
-        /// 绘制某层级的贴图混合权重列表：每行 = 池中一个 TerrainLayer（名称 + 权重 IntField）。
+        /// 绘制某层级的贴图混合权重列表：每行 = 池中一个 TerrainLayer（缩略图 + 名称 + 权重 IntField）。
         /// 权重 0 = 该层不纳入此 TerrainLayer。
         /// </summary>
         private void DrawWeightList(List<int> weights, List<TerrainLayer> pool, string label)
@@ -691,11 +691,23 @@ namespace AiTerrainWorkflow.LayerEditor
             while (weights.Count < pool.Count) weights.Add(0);
             if (weights.Count > pool.Count) weights.RemoveRange(pool.Count, weights.Count - pool.Count);
 
+            const float thumbSize = 28f;
             for (int i = 0; i < pool.Count; i++)
             {
                 var tl = pool[i];
                 string tlName = tl != null ? tl.name : $"{label}[{i}]";
+
                 EditorGUILayout.BeginHorizontal();
+                // 外观缩略图（diffuseTexture；无纹理时灰色占位）
+                var thumbRect = GUILayoutUtility.GetRect(thumbSize, thumbSize, GUILayout.Width(thumbSize), GUILayout.Height(thumbSize));
+                var diffuse = tl != null ? tl.diffuseTexture : null;
+                if (diffuse != null)
+                    GUI.DrawTexture(thumbRect, diffuse, ScaleMode.ScaleToFit);
+                else
+                    DrawTinted(thumbRect, new Color(0.4f, 0.4f, 0.4f, 1f));
+                DrawRectOutline(thumbRect, new Color(0f, 0f, 0f, 0.4f), 1f);
+
+                GUILayout.Space(4);
                 // TL 名自动占满剩余宽度（不固定，避免截断）
                 EditorGUILayout.LabelField($"  [{i}] {tlName}", EditorStyles.label);
                 GUILayout.FlexibleSpace();
