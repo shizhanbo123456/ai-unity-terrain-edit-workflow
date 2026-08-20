@@ -39,7 +39,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
         public const string ConfigRootDirRelative =
-            "Assets/unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
+            "Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
 
         private const string PrefsLastProject = "AiTerrainWorkflow.LastPaintProject";
         private const int LayerCount = 16;
@@ -232,8 +232,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 string layerPath = $"{dirRel}/Layer_{i + 1:00}.asset";
                 AssetDatabase.CreateAsset(layer, layerPath);
                 project.layers.Add(layer);
-                project.usageMatrix.Add(new LayerTerrainUsage());
             }
+            project.SyncAllLayerWeights();
             AssetDatabase.CreateAsset(project, $"{dirRel}/{name}.asset");
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -273,6 +273,9 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawGlobalConfig();
 
             EditorGUILayout.Space(10);
+            DrawGlobalTerrainLayers();
+
+            EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("层级配置（名称/颜色只读，请在 Inspector 修改对应 SO）", EditorStyles.boldLabel);
             for (int i = 0; i < _project.layers.Count; i++)
             {
@@ -297,6 +300,30 @@ namespace AiTerrainWorkflow.LayerEditor
             cfg.gApplySpacing = Mathf.Max(0.01f, EditorGUILayout.FloatField("G Apply Spacing / 防卷曲 (m)", cfg.gApplySpacing));
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
             cfg.worldPerPixel = Mathf.Max(0.001f, EditorGUILayout.FloatField("World Per Pixel (m/px)", cfg.worldPerPixel));
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField("全局贴图种子（value-noise）", EditorStyles.boldLabel);
+            _project.naturalSeed = EditorGUILayout.IntField("自然贴图种子", _project.naturalSeed);
+            _project.roadSeed = EditorGUILayout.IntField("道路贴图种子", _project.roadSeed);
+        }
+
+        /// <summary>
+        /// 全局 TerrainLayer 池（自然/道路两套）。
+        /// 各层级具体用哪些 TerrainLayer 及其权重，在层级配置的 naturalLayerWeights / roadLayerWeights 中设置。
+        /// </summary>
+        private void DrawGlobalTerrainLayers()
+        {
+            EditorGUILayout.LabelField("全局 TerrainLayer 池", EditorStyles.boldLabel);
+
+            // ===== 自然贴图 TerrainLayer 池 =====
+            EditorGUILayout.LabelField("自然贴图 TerrainLayer 池", EditorStyles.boldLabel);
+            DrawTerrainLayerPool(_project.naturalTerrainLayers, "自然");
+
+            EditorGUILayout.Space(8);
+
+            // ===== 道路贴图 TerrainLayer 池 =====
+            EditorGUILayout.LabelField("道路贴图 TerrainLayer 池", EditorStyles.boldLabel);
+            DrawTerrainLayerPool(_project.roadTerrainLayers, "道路");
         }
 
         private void DrawLayerConfig(int index, LayerConfigSO layer)
@@ -318,14 +345,10 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.BeginVertical("box");
             EditorGUILayout.LabelField("颜色 / 名称请在 Inspector 中修改", EditorStyles.miniLabel);
 
-            EditorGUILayout.LabelField("自然地面贴图", EditorStyles.boldLabel);
-            DrawTextureList(layer.naturalTextures, "自然");
-            layer.naturalSeed = EditorGUILayout.IntField("自然贴图种子", layer.naturalSeed);
-
             EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("道路贴图", EditorStyles.boldLabel);
-            DrawTextureList(layer.roadTextures, "道路");
-            layer.roadSeed = EditorGUILayout.IntField("道路贴图种子", layer.roadSeed);
+            EditorGUILayout.LabelField("贴图混合权重（0 = 不纳入；索引对应全局池）", EditorStyles.boldLabel);
+            DrawWeightList(layer.naturalLayerWeights, _project.naturalTerrainLayers, "自然");
+            DrawWeightList(layer.roadLayerWeights, _project.roadTerrainLayers, "道路");
 
             EditorGUILayout.Space(4);
             layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
@@ -338,21 +361,6 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.EndVertical();
             EditorUtility.SetDirty(layer);
-        }
-
-        private void DrawTextureList(List<Texture2D> list, string label)
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                EditorGUILayout.BeginHorizontal();
-                list[i] = (Texture2D)EditorGUILayout.ObjectField(
-                    $"{label}[{i}]", list[i], typeof(Texture2D), false);
-                if (GUILayout.Button("-", GUILayout.Width(20)))
-                    list.RemoveAt(i--);
-                EditorGUILayout.EndHorizontal();
-            }
-            if (GUILayout.Button($"+ 添加{label}贴图"))
-                list.Add(null);
         }
 
         private void DrawIntList(List<int> list)
@@ -599,33 +607,12 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             _texScroll = EditorGUILayout.BeginScrollView(_texScroll);
 
-            EditorGUILayout.LabelField("TerrainLayer 列表（贴图矩阵的列）", EditorStyles.boldLabel);
-            for (int i = 0; i < _project.terrainLayers.Count; i++)
-            {
-                EditorGUILayout.BeginHorizontal();
-                _project.terrainLayers[i] = (TerrainLayer)EditorGUILayout.ObjectField(
-                    $"TerrainLayer[{i}]", _project.terrainLayers[i], typeof(TerrainLayer), false);
-                if (GUILayout.Button("-", GUILayout.Width(20)))
-                {
-                    _project.terrainLayers.RemoveAt(i);
-                    SyncMatrix();
-                }
-                EditorGUILayout.EndHorizontal();
-            }
-            if (GUILayout.Button("+ 添加 TerrainLayer"))
-            {
-                _project.terrainLayers.Add(null);
-                SyncMatrix();
-            }
+            EditorGUILayout.HelpBox(
+                "TerrainLayer 池、使用矩阵与贴图种子已在「配置修改」子界面的全局配置中编辑。\n" +
+                "本子界面仅负责距离场 + 路网计算。",
+                MessageType.Info);
 
-            EditorGUILayout.Space(4);
-            if (GUILayout.Button("同步矩阵尺寸（对齐层数与 TerrainLayer 数）"))
-                SyncMatrix();
-
-            EditorGUILayout.Space(8);
-            DrawUsageMatrix();
-
-            EditorGUILayout.Space(10);
+            EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("距离场 + 路网计算（RGB 三通道）", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "点击计算：按组合层级分组 → 距离场 R（maxD 自动归一化）→ 随机游走生成 G/B。\n" +
@@ -649,6 +636,58 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
+        }
+
+        /// <summary>绘制一个 TerrainLayer 池的编辑列表（带添加/删除按钮）。</summary>
+        private void DrawTerrainLayerPool(List<TerrainLayer> pool, string label)
+        {
+            for (int i = 0; i < pool.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                pool[i] = (TerrainLayer)EditorGUILayout.ObjectField(
+                    $"{label} TerrainLayer[{i}]", pool[i], typeof(TerrainLayer), false);
+                if (GUILayout.Button("-", GUILayout.Width(20)))
+                {
+                    pool.RemoveAt(i--);
+                    _project.SyncAllLayerWeights();
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button($"+ 添加{label} TerrainLayer"))
+            {
+                pool.Add(null);
+                _project.SyncAllLayerWeights();
+            }
+        }
+
+        /// <summary>
+        /// 绘制某层级的贴图混合权重列表：每行 = 池中一个 TerrainLayer（名称 + 权重 IntField）。
+        /// 权重 0 = 该层不纳入此 TerrainLayer。
+        /// </summary>
+        private void DrawWeightList(List<int> weights, List<TerrainLayer> pool, string label)
+        {
+            if (pool.Count == 0)
+            {
+                EditorGUILayout.HelpBox($"{label} TerrainLayer 池为空，请先在全局配置中添加。", MessageType.Info);
+                return;
+            }
+            // 池增删后确保长度对齐
+            while (weights.Count < pool.Count) weights.Add(0);
+            if (weights.Count > pool.Count) weights.RemoveRange(pool.Count, weights.Count - pool.Count);
+
+            for (int i = 0; i < pool.Count; i++)
+            {
+                var tl = pool[i];
+                string tlName = tl != null ? tl.name : $"{label}[{i}]";
+                EditorGUILayout.BeginHorizontal();
+                // TL 名自动占满剩余宽度（不固定，避免截断）
+                EditorGUILayout.LabelField($"  [{i}] {tlName}", EditorStyles.label);
+                GUILayout.FlexibleSpace();
+                GUILayout.Label("权重", EditorStyles.miniLabel, GUILayout.Width(32));
+                // 无 label 前缀的输入框，宽度独立，数值完整可见
+                weights[i] = Mathf.Max(0, EditorGUILayout.IntField(weights[i], GUILayout.Width(64)));
+                EditorGUILayout.EndHorizontal();
+            }
         }
 
         private void ComputeRgb()
@@ -688,81 +727,6 @@ namespace AiTerrainWorkflow.LayerEditor
             Debug.Log($"[Terrain Paint Workflow] RGB 计算完成，已保存 {fileRel}" +
                       $"（{_project.layers.Count} 层 / {_project.groupMaxD?.Length ?? 0} 个组合层）");
             Repaint();
-        }
-
-        private void SyncMatrix()
-        {
-            if (_project == null)
-                return;
-            int rows = _project.layers.Count;
-            int cols = _project.terrainLayers.Count;
-            while (_project.usageMatrix.Count < rows)
-                _project.usageMatrix.Add(new LayerTerrainUsage());
-            if (_project.usageMatrix.Count > rows)
-                _project.usageMatrix.RemoveRange(rows, _project.usageMatrix.Count - rows);
-            for (int r = 0; r < rows; r++)
-            {
-                var row = _project.usageMatrix[r];
-                if (row == null)
-                {
-                    row = new LayerTerrainUsage();
-                    _project.usageMatrix[r] = row;
-                }
-                ResizeBools(row.natural, cols);
-                ResizeBools(row.road, cols);
-            }
-            EditorUtility.SetDirty(_project);
-        }
-
-        private static void ResizeBools(List<bool> list, int count)
-        {
-            while (list.Count < count) list.Add(false);
-            if (list.Count > count) list.RemoveRange(count, list.Count - count);
-        }
-
-        private void DrawUsageMatrix()
-        {
-            int rows = _project.layers.Count;
-            int cols = _project.terrainLayers.Count;
-            EditorGUILayout.LabelField($"layer × TerrainLayer 矩阵（{rows} 层 × {cols} 列）", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("每格两个复选框：左=自然地面启用，右=道路启用", MessageType.None);
-
-            const float labelW = 110f;
-            const float cellW = 64f;
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.Space(labelW);
-            for (int c = 0; c < cols; c++)
-            {
-                var tl = _project.terrainLayers[c];
-                string tn = tl != null ? tl.name : $"TL{c}";
-                EditorGUILayout.LabelField(tn, EditorStyles.miniLabel, GUILayout.Width(cellW));
-            }
-            EditorGUILayout.EndHorizontal();
-
-            for (int r = 0; r < rows; r++)
-            {
-                if (r >= _project.usageMatrix.Count)
-                    break;
-                var row = _project.usageMatrix[r];
-                var layer = r < _project.layers.Count ? _project.layers[r] : null;
-                string rowName = layer != null ? $"{r + 1}.{layer.layerName}" : $"Layer{r + 1}";
-
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField(rowName, EditorStyles.miniLabel, GUILayout.Width(labelW));
-                for (int c = 0; c < cols; c++)
-                {
-                    EditorGUILayout.BeginHorizontal(GUILayout.Width(cellW));
-                    bool n = c < row.natural.Count && row.natural[c];
-                    bool rd = c < row.road.Count && row.road[c];
-                    n = EditorGUILayout.Toggle(n, GUILayout.Width(28));
-                    rd = EditorGUILayout.Toggle(rd, GUILayout.Width(28));
-                    if (c < row.natural.Count) row.natural[c] = n;
-                    if (c < row.road.Count) row.road[c] = rd;
-                    EditorGUILayout.EndHorizontal();
-                }
-                EditorGUILayout.EndHorizontal();
-            }
         }
 
         // ---------- ④ 应用（占位） ----------

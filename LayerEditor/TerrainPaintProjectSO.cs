@@ -38,29 +38,22 @@ namespace AiTerrainWorkflow.LayerEditor
     }
 
     /// <summary>
-    /// layer × TerrainLayer 矩阵的一行（对应一个层级）。
-    /// natural / road 长度须与 TerrainPaintProjectSO.terrainLayers 一致。
-    /// </summary>
-    [Serializable]
-    public class LayerTerrainUsage
-    {
-        [Tooltip("该 TerrainLayer 是否用于自然地面")]
-        public List<bool> natural = new List<bool>();
-        [Tooltip("该 TerrainLayer 是否用于道路")]
-        public List<bool> road = new List<bool>();
-    }
-
-    /// <summary>
     /// 地形贴图工作流的总配置 SO。一个配置 = TerrainGeneratorConfigs 下的一个子文件夹，
     /// 内含：本总 SO + 16 个层级 SO（layers）+ 层次图（layerMap）。
     ///
     /// 编辑器窗口的所有信息都从本 SO 加载（窗口本身不存储持久数据）。
-    /// TerrainPaintConfig（全局配置）是本 SO 的一部分；层级配置在各自的 LayerConfigSO 中。
+    /// TerrainPaintConfig（全局参数）是本 SO 的一部分；层级配置在各自的 LayerConfigSO 中。
+    ///
+    /// TerrainLayer 池与贴图种子均在本 SO 中统一管理：
+    ///   - naturalTerrainLayers / roadTerrainLayers：两组独立的 TerrainLayer 池
+    ///   - naturalSeed / roadSeed：全局 value-noise 种子（不细化到层级）
+    /// 每个工作流层（LayerConfigSO）持有两个 int 列表（自然/道路），
+    /// 列表索引 = 对应池的 TerrainLayer id，值 = 该 TL 在贴图混合中的权重（0 = 不纳入）。
     /// </summary>
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]
     public class TerrainPaintProjectSO : ScriptableObject
     {
-        [Tooltip("全局配置（随机游走 / 贴图混合）")]
+        [Tooltip("全局配置（随机游走 / 贴图混合 / 坐标换算）")]
         public TerrainPaintConfig config = new TerrainPaintConfig();
 
         [Tooltip("全部层级配置（固定 16 个）")]
@@ -69,17 +62,74 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("层次图（配置文件夹内资产；绘画子界面的画布）")]
         public Texture2D layerMap;
 
-        [Tooltip("本配置用到的 TerrainLayer 列表（贴图矩阵的列）")]
-        public List<TerrainLayer> terrainLayers = new List<TerrainLayer>();
+        // ---------- 自然贴图 TerrainLayer 池 ----------
 
-        [Tooltip("layer × TerrainLayer 矩阵：行 = layers，列 = terrainLayers；每格两个复选框（自然/道路）")]
-        public List<LayerTerrainUsage> usageMatrix = new List<LayerTerrainUsage>();
+        [Header("自然贴图 TerrainLayer 池")]
+        [Tooltip("用于自然地面的 TerrainLayer 列表。各层级 LayerConfigSO.naturalLayerWeights 的索引对应本池。")]
+        public List<TerrainLayer> naturalTerrainLayers = new List<TerrainLayer>();
+
+        // ---------- 道路贴图 TerrainLayer 池 ----------
+
+        [Header("道路贴图 TerrainLayer 池")]
+        [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
+        public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
+
+        // ---------- 全局贴图种子 ----------
+
+        [Header("全局贴图种子")]
+        [Tooltip("自然贴图 value-noise 种子（全局，不细化到层级）")]
+        public int naturalSeed = 0;
+        [Tooltip("道路贴图 value-noise 种子（全局，不细化到层级）")]
+        public int roadSeed = 0;
+
+        // ---------- 计算结果 ----------
 
         [HideInInspector, Tooltip("各组合层级的距离场全局最大值（自动计算）")]
         public float[] groupMaxD;
 
         [Tooltip("计算结果图（RGB：R=距离场，G=占用/间隔，B=路面掩码）")]
         public Texture2D resultTexture;
+
+        // ---------- 辅助方法 ----------
+
+        /// <summary>
+        /// 同步所有层级 SO 的自然/道路权重列表长度，使其与两个池对齐。
+        /// 添加 / 删除 / 重排 TerrainLayer 池后调用（截断或补零）。
+        /// </summary>
+        public void SyncAllLayerWeights()
+        {
+            int natCount = naturalTerrainLayers.Count;
+            int roadCount = roadTerrainLayers.Count;
+            foreach (var layer in layers)
+            {
+                if (layer == null) continue;
+                layer.SyncWeightLists(natCount, roadCount);
+            }
+        }
+
+        /// <summary>获取指定工作流层启用的自然 TerrainLayer 池索引（权重 &gt; 0）。</summary>
+        public List<int> GetNaturalIndicesForLayer(int layerIndex)
+        {
+            var result = new List<int>();
+            if (layerIndex < 0 || layerIndex >= layers.Count || layers[layerIndex] == null)
+                return result;
+            var weights = layers[layerIndex].naturalLayerWeights;
+            for (int i = 0; i < weights.Count; i++)
+                if (weights[i] > 0) result.Add(i);
+            return result;
+        }
+
+        /// <summary>获取指定工作流层启用的道路 TerrainLayer 池索引（权重 &gt; 0）。</summary>
+        public List<int> GetRoadIndicesForLayer(int layerIndex)
+        {
+            var result = new List<int>();
+            if (layerIndex < 0 || layerIndex >= layers.Count || layers[layerIndex] == null)
+                return result;
+            var weights = layers[layerIndex].roadLayerWeights;
+            for (int i = 0; i < weights.Count; i++)
+                if (weights[i] > 0) result.Add(i);
+            return result;
+        }
     }
 }
 #endif

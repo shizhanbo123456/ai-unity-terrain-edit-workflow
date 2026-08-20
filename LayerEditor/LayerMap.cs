@@ -19,7 +19,7 @@ namespace AiTerrainWorkflow.LayerEditor
     {
         /// <summary>地形配置根目录（Assets 相对路径）；每个配置一个子文件夹，内含总 SO + 层级 SO + 层次图。</summary>
         public const string ConfigRootDirRelative =
-            "Assets/unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
+            "Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
 
         public int Width { get; private set; }
         public int Height { get; private set; }

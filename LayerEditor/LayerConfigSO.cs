@@ -9,7 +9,13 @@ namespace AiTerrainWorkflow.LayerEditor
     ///
     /// 层级数量固定 16 个。**名称与颜色只能在 Inspector 中修改**——
     /// 编辑器窗口（配置修改 / 绘画子界面）只读取显示，不允许在窗口中改动。
-    /// 其余参数（贴图、道路生成）可在窗口的「配置修改」子界面编辑。
+    /// 其余参数（道路生成、贴图混合权重）可在窗口的「配置修改」子界面编辑。
+    ///
+    /// 贴图混合：本层用到的自然/道路 TerrainLayer 及其权重由
+    /// naturalLayerWeights / roadLayerWeights 两个 int 列表描述——
+    /// 列表索引 = TerrainPaintProjectSO 中对应池的 TerrainLayer id，
+    /// 列表值 = 该 TerrainLayer 在贴图混合中的权重（0 = 不纳入）。
+    /// 全局贴图种子（naturalSeed / roadSeed）在 TerrainPaintProjectSO 中。
     /// </summary>
     public class LayerConfigSO : ScriptableObject
     {
@@ -19,15 +25,11 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("层级名称（语义文本，如 \"草地\"）")]
         public string layerName;
 
-        [Header("自然地面贴图")]
-        [Tooltip("非路面区域的贴图列表，多选按 value-noise 加权混合")]
-        public List<Texture2D> naturalTextures = new List<Texture2D>();
-        public int naturalSeed;
-
-        [Header("道路贴图")]
-        [Tooltip("路面区域的贴图列表，多选按 value-noise 加权混合")]
-        public List<Texture2D> roadTextures = new List<Texture2D>();
-        public int roadSeed;
+        [Header("贴图混合权重")]
+        [Tooltip("自然 TerrainLayer 权重：索引 = TerrainPaintProjectSO.naturalTerrainLayers 池 id，值 = 权重（0 = 不纳入混合）。")]
+        public List<int> naturalLayerWeights = new List<int>();
+        [Tooltip("道路 TerrainLayer 权重：索引 = TerrainPaintProjectSO.roadTerrainLayers 池 id，值 = 权重（0 = 不纳入混合）。")]
+        public List<int> roadLayerWeights = new List<int>();
 
         [Header("道路生成")]
         [Tooltip("是否生成路面；false → 该层 R 全 0，路不可进入")]
@@ -40,6 +42,19 @@ namespace AiTerrainWorkflow.LayerEditor
         public AnimationCurve roadFinalRemap = AnimationCurve.Linear(0f, 0f, 1f, 1f);
         [Tooltip("可邻接层级索引（0 基，用于组合层级分组）")]
         public List<int> adjLayers = new List<int>();
+
+        /// <summary>同步自然/道路权重列表长度与两个池对齐（截断或补零）。</summary>
+        public void SyncWeightLists(int naturalPoolCount, int roadPoolCount)
+        {
+            SyncListLength(naturalLayerWeights, naturalPoolCount);
+            SyncListLength(roadLayerWeights, roadPoolCount);
+        }
+
+        private static void SyncListLength(List<int> list, int count)
+        {
+            while (list.Count < count) list.Add(0);
+            if (list.Count > count) list.RemoveRange(count, list.Count - count);
+        }
     }
 }
 #endif
