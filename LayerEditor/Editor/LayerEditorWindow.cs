@@ -9,12 +9,12 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 四个子界面：
-    ///   ① 配置修改  全局参数（TerrainPaintConfig）+ 逐层参数（LayerConfigSO 的贴图/道路参数；
-    ///                层名与颜色只读，需在 Inspector 中修改对应 SO）
-    ///   ② 绘画      层次图绘制（原 LayerEditor 全部功能；图层颜色/名称从层级 SO 读取）
-    ///   ③ 贴图编辑  TerrainLayer 列表 + layer×TerrainLayer 矩阵（自然/道路双复选框）；距离场/游走计算下阶段实现
-    ///   ④ 应用      占位（下阶段实现：传入 Terrain 并烘焙 splatmap）
+    /// 五个子界面：
+    ///   ① 全局配置  全局参数（TerrainPaintConfig）+ 全局贴图种子 + TerrainLayer 池
+    ///   ② 层级配置  逐层参数（LayerConfigSO 的贴图混合权重/道路参数；层名与颜色只读，需在 Inspector 中修改对应 SO）
+    ///   ③ 绘画      层次图绘制（原 LayerEditor 全部功能；图层颜色/名称从层级 SO 读取）
+    ///   ④ 贴图编辑  距离场/路网计算（RGB 三通道）
+    ///   ⑤ 应用      占位（下阶段实现：传入 Terrain 并烘焙 splatmap）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -31,7 +31,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private enum WorkflowStep
         {
-            Config,
+            GlobalConfig,
+            LayerConfig,
             Paint,
             Texture,
             Apply,
@@ -45,13 +46,13 @@ namespace AiTerrainWorkflow.LayerEditor
         private const int LayerCount = 16;
 
         private TerrainPaintProjectSO _project;
-        private WorkflowStep _step = WorkflowStep.Config;
+        private WorkflowStep _step = WorkflowStep.GlobalConfig;
 
         // 创建配置 UI
         private bool _creating;
         private string _newConfigName = "";
 
-        // 配置修改子界面 UI 状态
+        // 配置子界面 UI 状态
         private Vector2 _configScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
 
@@ -136,7 +137,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             switch (_step)
             {
-                case WorkflowStep.Config: DrawConfigView(); break;
+                case WorkflowStep.GlobalConfig: DrawGlobalConfigView(); break;
+                case WorkflowStep.LayerConfig: DrawLayerConfigView(); break;
                 case WorkflowStep.Paint: DrawPaintView(); break;
                 case WorkflowStep.Texture: DrawTextureView(); break;
                 case WorkflowStep.Apply: DrawApplyView(); break;
@@ -168,7 +170,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             if (HasProject)
             {
-                var names = new[] { "配置修改", "绘画", "贴图编辑", "应用" };
+                var names = new[] { "全局配置", "层级配置", "绘画", "贴图编辑", "应用" };
                 int newStep = GUILayout.Toolbar((int)_step, names);
                 if (newStep != (int)_step)
                 {
@@ -240,7 +242,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             _project = project;
             RememberProject();
-            _step = WorkflowStep.Config;
+            _step = WorkflowStep.GlobalConfig;
             _resultPreview = null;
             _layerIdsCache = null;
             Debug.Log($"[Terrain Paint Workflow] 已创建配置: {dirRel}");
@@ -255,7 +257,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorPrefs.DeleteKey(PrefsLastProject);
         }
 
-        // ---------- ① 配置修改 ----------
+        // ---------- ① 全局配置 ----------
 
         private void EnsureLayerFoldouts()
         {
@@ -264,9 +266,8 @@ namespace AiTerrainWorkflow.LayerEditor
             if (_layerFoldouts.Count > n) _layerFoldouts.RemoveRange(n, _layerFoldouts.Count - n);
         }
 
-        private void DrawConfigView()
+        private void DrawGlobalConfigView()
         {
-            EnsureLayerFoldouts();
             _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
 
             EditorGUILayout.LabelField("全局配置", EditorStyles.boldLabel);
@@ -275,7 +276,15 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.Space(10);
             DrawGlobalTerrainLayers();
 
-            EditorGUILayout.Space(10);
+            EditorGUILayout.EndScrollView();
+            EditorUtility.SetDirty(_project);
+        }
+
+        private void DrawLayerConfigView()
+        {
+            EnsureLayerFoldouts();
+            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+
             EditorGUILayout.LabelField("层级配置（名称/颜色只读，请在 Inspector 修改对应 SO）", EditorStyles.boldLabel);
             for (int i = 0; i < _project.layers.Count; i++)
             {
@@ -624,7 +633,7 @@ namespace AiTerrainWorkflow.LayerEditor
             _texScroll = EditorGUILayout.BeginScrollView(_texScroll);
 
             EditorGUILayout.HelpBox(
-                "TerrainLayer 池、使用矩阵与贴图种子已在「配置修改」子界面的全局配置中编辑。\n" +
+                "TerrainLayer 池、贴图种子与层级权重已在「全局配置」「层级配置」子界面中编辑。\n" +
                 "本子界面仅负责距离场 + 路网计算。",
                 MessageType.Info);
 
