@@ -193,6 +193,64 @@ namespace AiTerrainWorkflow.LayerEditor
             return true;
         }
 
+        // ---------- MapData 持久化（画布 ↔ 层ID float[][]） ----------
+
+        /// <summary>
+        /// 画布像素 → 层ID 二维数组（float 值 = 层索引；透明/未匹配 = -1）。
+        /// 与 TerrainRoadGen.ParseLayerIds 同规则（按颜色精确匹配），MapData 存储层写 "layerMap" key 用。
+        /// </summary>
+        public float[][] ToIdArray(List<LayerConfigSO> layers)
+        {
+            var data = new float[Height][];
+            for (int y = 0; y < Height; y++)
+            {
+                var row = new float[Width];
+                int baseIdx = y * Width;
+                for (int x = 0; x < Width; x++)
+                    row[x] = FindLayerId(_pixels[baseIdx + x], layers);
+                data[y] = row;
+            }
+            return data;
+        }
+
+        /// <summary>
+        /// 层ID 二维数组 → 画布（id→层级颜色；-1/越界→透明）。
+        /// 按 ids 尺寸重建画布（清空撤销栈），供打开配置时恢复绘制现场。
+        /// </summary>
+        public void LoadFromIdArray(float[][] ids, List<LayerConfigSO> layers)
+        {
+            if (ids == null || ids.Length == 0 || ids[0] == null)
+                return;
+            int h = ids.Length;
+            int w = ids[0].Length;
+            Resize(w, h); // 重建透明画布（同时清撤销栈）
+
+            for (int y = 0; y < h; y++)
+            {
+                var row = ids[y];
+                int baseIdx = y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    int id = Mathf.RoundToInt(row[x]);
+                    _pixels[baseIdx + x] = (id >= 0 && id < layers.Count && layers[id] != null)
+                        ? layers[id].color
+                        : new Color32(0, 0, 0, 0);
+                }
+            }
+            Apply();
+        }
+
+        private static float FindLayerId(Color32 c, List<LayerConfigSO> layers)
+        {
+            for (int i = 0; i < layers.Count; i++)
+            {
+                var lc = layers[i].color;
+                if (lc.r == c.r && lc.g == c.g && lc.b == c.b && lc.a == c.a)
+                    return i;
+            }
+            return -1f;
+        }
+
         // ---------- 内部实现 ----------
 
         private void RebuildTexture()

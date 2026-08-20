@@ -1,6 +1,6 @@
-#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 namespace AiTerrainWorkflow.LayerEditor
@@ -124,6 +124,29 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("计算结果图（RGB：R=距离场，G=占用/间隔，B=路面掩码）")]
         public Texture2D resultTexture;
 
+        // ---------- MapData 栅格数据（存储层） ----------
+
+        /// <summary>MapData 子目录名（位于配置文件夹下）。</summary>
+        public const string MapDataFolderName = "MapData";
+
+        /// <summary>允许的栅格分辨率（创建配置时单选）。</summary>
+        public static readonly int[] AllowedResolutions = { 128, 256, 512, 1024 };
+
+        [Header("MapData 栅格数据")]
+        [Tooltip("所有栅格化数据的尺寸（创建配置时单选 128/256/512/1024；layerMap/height/distance/occupancy/road 等均为此尺寸）")]
+        public int mapResolution = 512;
+
+        [Tooltip("本配置 MapData 目录下的 txt 文件引用（key + TextAsset）。编辑器写入后维护；运行时经它读取 float[][]。")]
+        public List<MapDataRef> mapDataFiles = new List<MapDataRef>();
+
+        /// <summary>MapData 文件引用项。</summary>
+        [Serializable]
+        public class MapDataRef
+        {
+            public string key;
+            public TextAsset file;
+        }
+
         // ---------- 辅助方法 ----------
 
         /// <summary>
@@ -192,6 +215,153 @@ namespace AiTerrainWorkflow.LayerEditor
 
         /// <summary>是否存在层级被加入多个邻接组。</summary>
         public bool HasAdjacencyConflict => FindDuplicateLayerIndices().Count > 0;
+
+        // ---------- MapData 接口（ReadMap/WriteMap/DeleteMap/HasMap） ----------
+
+        /// <summary>MapData 目录（Assets 相对路径，如 Assets/.../TerrainGeneratorConfigs/&lt;配置&gt;/MapData）；非编辑器环境返回 null。</summary>
+        public string MapDataDirRelative()
+        {
+#if UNITY_EDITOR
+            string soPath = UnityEditor.AssetDatabase.GetAssetPath(this);
+            if (string.IsNullOrEmpty(soPath)) return null;
+            string dir = Path.GetDirectoryName(soPath)?.Replace('\\', '/');
+            return string.IsNullOrEmpty(dir) ? null : dir + "/" + MapDataFolderName;
+#else
+            return null;
+#endif
+        }
+
+        /// <summary>MapData 目录（绝对路径）；非编辑器环境返回 null。</summary>
+        public string MapDataDirAbsolute()
+        {
+            string rel = MapDataDirRelative();
+            return string.IsNullOrEmpty(rel) ? null : Path.Combine(Application.dataPath, "..", rel);
+        }
+
+        /// <summary>指定 key 的 txt 文件路径（Assets 相对路径）；非编辑器环境返回 null。</summary>
+        public string GetMapFilePath(string key)
+        {
+            string rel = MapDataDirRelative();
+            return string.IsNullOrEmpty(rel) ? null : rel + "/" + MapDataStore.SanitizeKey(key) + ".txt";
+        }
+
+        private MapDataRef GetMapDataRef(string key)
+        {
+            foreach (var e in mapDataFiles)
+                if (e != null && e.key == key) return e;
+            return null;
+        }
+
+        /// <summary>
+        /// 读取栅格数据（float[][]）。
+        /// 运行时：从 SO 持有的 TextAsset（随构建打包）解码；
+        /// 编辑器：直接读磁盘文件（保证每笔写盘后都是最新内容）。
+        /// 不存在返回 null。
+        /// </summary>
+        public float[][] ReadMap(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            // 运行时优先 TextAsset（打包可读）
+            var entry = GetMapDataRef(key);
+            if (entry != null && entry.file != null)
+                return CsvArrayCodec.Decode(entry.file.text);
+
+#if UNITY_EDITOR
+            string dir = MapDataDirAbsolute();
+            if (!string.IsNullOrEmpty(dir))
+            {
+                var store = new MapDataStore(dir);
+                if (store.Exists(key))
+                    return store.Read(key);
+            }
+#endif
+            return null;
+        }
+
+        public bool HasMap(string key)
+        {
+            if (GetMapDataRef(key) != null) return true;
+#if UNITY_EDITOR
+            string dir = MapDataDirAbsolute();
+            if (!string.IsNullOrEmpty(dir))
+                return new MapDataStore(dir).Exists(key);
+#endif
+            return false;
+        }
+
+        /// <summary>写入栅格数据（float[][] → CSV txt）。仅编辑器使用；不触发资产刷新（由 RefreshMapDataRefs 统一做）。</summary>
+        public void WriteMap(string key, float[][] values)
+        {
+#if UNITY_EDITOR
+            if (string.IsNullOrEmpty(key) || values == null) return;
+            string dir = MapDataDirAbsolute();
+            if (string.IsNullOrEmpty(dir)) return;
+            new MapDataStore(dir).Write(key, values);
+
+            // 引用维护：确保列表中存在该 key 项（file 暂为空，刷新后重链）
+            var entry = GetMapDataRef(key);
+            if (entry == null)
+                mapDataFiles.Add(new MapDataRef { key = key });
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
+
+        /// <summary>删除栅格数据（文件 + 引用）。仅编辑器使用。</summary>
+        public void DeleteMap(string key)
+        {
+#if UNITY_EDITOR
+            if (string.IsNullOrEmpty(key)) return;
+            string dir = MapDataDirAbsolute();
+            if (!string.IsNullOrEmpty(dir))
+                new MapDataStore(dir).Delete(key);
+            mapDataFiles.RemoveAll(e => e != null && e.key == key);
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
+
+        /// <summary>
+        /// 同步 MapData txt 引用：刷新资产后按 key 重链 TextAsset，移除已不存在的文件引用。
+        /// 建议在「保存/关窗/切配置」等提交点调用；每笔写盘不必调用（避免频繁资产刷新卡编辑器）。
+        /// </summary>
+        public void RefreshMapDataRefs(bool refreshAssets = true)
+        {
+#if UNITY_EDITOR
+            string dirRel = MapDataDirRelative();
+            if (string.IsNullOrEmpty(dirRel)) return;
+
+            if (refreshAssets)
+                UnityEditor.AssetDatabase.Refresh();
+
+            var keys = new List<string>();
+            foreach (var e in mapDataFiles)
+                if (e != null && !string.IsNullOrEmpty(e.key)) keys.Add(e.key);
+
+            foreach (var key in keys)
+            {
+                string p = dirRel + "/" + MapDataStore.SanitizeKey(key) + ".txt";
+                var ta = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>(p);
+                var entry = GetMapDataRef(key);
+                if (entry == null)
+                {
+                    entry = new MapDataRef { key = key };
+                    mapDataFiles.Add(entry);
+                }
+                entry.file = ta;
+            }
+
+            // 移除已无文件的引用
+            string dirFull = MapDataDirAbsolute();
+            if (!string.IsNullOrEmpty(dirFull))
+            {
+                mapDataFiles.RemoveAll(e =>
+                {
+                    if (e == null || string.IsNullOrEmpty(e.key)) return true;
+                    return !File.Exists(Path.Combine(dirFull, MapDataStore.SanitizeKey(e.key) + ".txt"));
+                });
+            }
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
     }
 }
-#endif

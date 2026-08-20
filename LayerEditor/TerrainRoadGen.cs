@@ -357,6 +357,15 @@ namespace AiTerrainWorkflow.LayerEditor
         public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds,
             out float[] rOut, out float[] gOut, out float[] bOut)
         {
+            int w = project.layerMap != null ? project.layerMap.width : project.mapResolution;
+            int h = project.layerMap != null ? project.layerMap.height : project.mapResolution;
+            return ComputeAll(project, layerIds, w, h, out rOut, out gOut, out bOut);
+        }
+
+        /// <summary>ComputeAll 的显式尺寸重载（不再依赖 project.layerMap 存在）。</summary>
+        public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds, int w, int h,
+            out float[] rOut, out float[] gOut, out float[] bOut)
+        {
             rOut = null;
             gOut = null;
             bOut = null;
@@ -370,8 +379,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 return null;
             }
 
-            int w = project.layerMap.width;
-            int h = project.layerMap.height;
             var groups = GroupLayers(project);
 
             var r = new float[w * h];
@@ -436,11 +443,12 @@ namespace AiTerrainWorkflow.LayerEditor
         // ---------- 高度图烘焙（高度编辑子界面） ----------
 
         /// <summary>
-        /// 烘焙高度图：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成高度数组；
-        /// 统计实际 min/max 写入 project.heightMin/heightMax；归一化后写入返回纹理的 R 通道。
-        /// 恢复公式：h = r * (max - min) + min（r 为 R 通道归一化值 [0,1]）。
+        /// 烘焙高度数据（float[][]）：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成；
+        /// 统计实际 min/max 写入 project.heightMin/heightMax；返回归一化到 [0,1] 的二维数组。
+        /// 恢复公式：h = r * (max - min) + min（r 为归一化值 [0,1]）。
+        /// MapData 存储层直接写本方法结果到 "height" key；预览图由窗口用 ToTexture 生成。
         /// </summary>
-        public static Texture2D BakeHeightMap(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
+        public static float[][] BakeHeightData(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
         {
             if (layerIds == null || layerIds.Length != w * h)
             {
@@ -451,12 +459,13 @@ namespace AiTerrainWorkflow.LayerEditor
             float scale = Mathf.Max(0.001f, project.heightScale);
             float seedOff = project.heightSeed * 13.37f;
 
-            var heights = new float[w * h];
+            var data = new float[h][];
             float hmin = float.MaxValue;
             float hmax = float.MinValue;
 
             for (int y = 0; y < h; y++)
             {
+                var row = new float[w];
                 for (int x = 0; x < w; x++)
                 {
                     int i = y * w + x;
@@ -467,11 +476,12 @@ namespace AiTerrainWorkflow.LayerEditor
 
                     // Perlin 噪声（seed 偏移 + 空间频率 scale），在层级高度范围内插值
                     float n = Mathf.PerlinNoise(x * scale + seedOff, y * scale + seedOff);
-                    heights[i] = Mathf.Lerp(range.x, range.y, n);
+                    row[x] = Mathf.Lerp(range.x, range.y, n);
 
-                    if (heights[i] < hmin) hmin = heights[i];
-                    if (heights[i] > hmax) hmax = heights[i];
+                    if (row[x] < hmin) hmin = row[x];
+                    if (row[x] > hmax) hmax = row[x];
                 }
+                data[y] = row;
             }
 
             // 防除零：范围过小时强制拉开
@@ -481,15 +491,35 @@ namespace AiTerrainWorkflow.LayerEditor
             project.heightMin = hmin;
             project.heightMax = hmax;
 
-            // 归一化 → R 通道
+            // 归一化到 [0,1]
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    data[y][x] = (data[y][x] - hmin) / (hmax - hmin);
+
+            return data;
+        }
+
+        /// <summary>
+        /// 烘焙高度图（Texture2D，兼容旧接口）：调用 <see cref="BakeHeightData"/> 后把归一化高度写入 R 通道。
+        /// 窗口已改用数据路径，本方法保留供外部/调试使用。
+        /// </summary>
+        public static Texture2D BakeHeightMap(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
+        {
+            var data = BakeHeightData(project, layerIds, w, h);
+            if (data == null)
+                return null;
+
             var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
             tex.filterMode = FilterMode.Point;
             tex.wrapMode = TextureWrapMode.Clamp;
             var px = new Color32[w * h];
-            for (int i = 0; i < px.Length; i++)
+            for (int y = 0; y < h; y++)
             {
-                float r = (heights[i] - hmin) / (hmax - hmin);
-                px[i] = new Color32((byte)Mathf.RoundToInt(Mathf.Clamp01(r) * 255f), 0, 0, 255);
+                for (int x = 0; x < w; x++)
+                {
+                    byte b = (byte)Mathf.RoundToInt(Mathf.Clamp01(data[y][x]) * 255f);
+                    px[y * w + x] = new Color32(b, 0, 0, 255);
+                }
             }
             tex.SetPixels32(px);
             tex.Apply();

@@ -54,6 +54,7 @@ namespace AiTerrainWorkflow.LayerEditor
         // 创建配置 UI
         private bool _creating;
         private string _newConfigName = "";
+        private int _createResolution = 512;
 
         // 左栏配置滚动状态（全局配置 + 层级配置 共同滚动）
         private Vector2 _configScroll;
@@ -65,8 +66,6 @@ namespace AiTerrainWorkflow.LayerEditor
         private int _brushRadius = 6;
         private LayerMap _map;
         private int _selectedLayer;
-        private int _newWidth = 256;
-        private int _newHeight = 256;
         private bool _dragging;
         private int _canvasHotControl;
         private Vector2Int _dragStartPx;
@@ -75,9 +74,10 @@ namespace AiTerrainWorkflow.LayerEditor
         private Rect _canvasRect;
         private float _canvasScale = 1f;
 
-        // 贴图编辑子界面 UI 状态
+        // 贴图/高度编辑子界面 UI 状态（预览仅内存，不落盘）
         private Vector2 _texScroll;
         private Texture2D _resultPreview;
+        private Texture2D _heightPreview;
         private int[] _layerIdsCache;
 
         private bool HasProject => _project != null;
@@ -126,7 +126,15 @@ namespace AiTerrainWorkflow.LayerEditor
             if (!string.IsNullOrEmpty(path))
                 _project = AssetDatabase.LoadAssetAtPath<TerrainPaintProjectSO>(path);
             if (_project != null)
-                _resultPreview = _project.resultTexture;
+            {
+                EnsurePaintMap();
+                LoadResultPreview();
+            }
+        }
+
+        private void OnDisable()
+        {
+            SavePaintMapIfAny();
         }
 
         // ---------- 主布局 ----------
@@ -193,8 +201,15 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 SavePaintMapIfAny();
                 _project = newProject;
-                _resultPreview = _project != null ? _project.resultTexture : null;
+                _resultPreview = null;
+                _heightPreview = null;
+                _map = null;
                 _layerIdsCache = null;
+                if (_project != null)
+                {
+                    EnsurePaintMap();
+                    LoadResultPreview();
+                }
                 RememberProject();
                 Repaint();
             }
@@ -230,6 +245,15 @@ namespace AiTerrainWorkflow.LayerEditor
             if (GUILayout.Button("取消"))
                 _creating = false;
             EditorGUILayout.EndHorizontal();
+
+            // 栅格分辨率单选：写入主配置，之后所有 MapData 栅格数据均此尺寸
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("栅格尺寸", EditorStyles.miniLabel);
+            int sel = System.Array.IndexOf(TerrainPaintProjectSO.AllowedResolutions, _createResolution);
+            if (sel < 0) sel = 2;
+            sel = GUILayout.Toolbar(sel, new[] { "128", "256", "512", "1024" });
+            _createResolution = TerrainPaintProjectSO.AllowedResolutions[sel];
+            EditorGUILayout.EndHorizontal();
         }
 
         private void DrawNoProject()
@@ -262,6 +286,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name;
+            project.mapResolution = _createResolution;
             // 默认创建上限数量的层（Layer0 透明 + 其余颜色层），可在工作流配置中调整
             for (int i = 0; i < TerrainPaintProjectSO.MaxLayerCount; i++)
             {
@@ -319,12 +344,36 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.LabelField("工作流配置", EditorStyles.boldLabel);
 
-            // 工作流图资产（层次图 / RGB 结果图）
-            EditorGUILayout.LabelField("工作流图", EditorStyles.boldLabel);
-            _project.layerMap = (Texture2D)EditorGUILayout.ObjectField(
-                "层次图（绘画画布）", _project.layerMap, typeof(Texture2D), false);
-            _project.resultTexture = (Texture2D)EditorGUILayout.ObjectField(
-                "计算结果图（RGB）", _project.resultTexture, typeof(Texture2D), false);
+            // 栅格分辨率（创建时选定；修改后需重新烘焙）
+            EditorGUILayout.LabelField("栅格分辨率", EditorStyles.boldLabel);
+            int resSel = System.Array.IndexOf(TerrainPaintProjectSO.AllowedResolutions, _project.mapResolution);
+            if (resSel < 0) resSel = 2;
+            int newResSel = EditorGUILayout.Popup("栅格分辨率", resSel, new[] { "128", "256", "512", "1024" });
+            if (newResSel != resSel)
+                _project.mapResolution = TerrainPaintProjectSO.AllowedResolutions[newResSel];
+            EditorGUILayout.HelpBox(
+                "所有栅格化数据（layerMap/height/distance/occupancy/road）均为该尺寸；修改后请重新绘制/烘焙。",
+                MessageType.None);
+
+            EditorGUILayout.Space(6);
+
+            // 工作流图预览（数据来自 MapData，图片仅用于查看）
+            EditorGUILayout.LabelField("工作流图预览（仅显示）", EditorStyles.boldLabel);
+            EnsurePaintMap();
+            if (_map != null)
+            {
+                float pw = Mathf.Min(220f, position.width - 60f);
+                float ph = pw * _map.Height / (float)Mathf.Max(1, _map.Width);
+                GUILayout.Label(_map.Texture, GUILayout.Width(pw), GUILayout.Height(ph));
+            }
+            if (_resultPreview == null)
+                LoadResultPreview();
+            if (_resultPreview != null)
+            {
+                float pw = Mathf.Min(220f, position.width - 60f);
+                float ph = pw * _resultPreview.height / (float)Mathf.Max(1, _resultPreview.width);
+                GUILayout.Label(_resultPreview, GUILayout.Width(pw), GUILayout.Height(ph));
+            }
 
             EditorGUILayout.Space(8);
 
@@ -463,8 +512,11 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
             EditorGUILayout.LabelField($"高度 Min: {_project.heightMin:F2}");
             EditorGUILayout.LabelField($"高度 Max: {_project.heightMax:F2}");
-            _project.heightMap = (Texture2D)EditorGUILayout.ObjectField(
-                "高度图", _project.heightMap, typeof(Texture2D), false);
+            EditorGUILayout.HelpBox(
+                _project.HasMap("height")
+                    ? "高度数据已烘焙（MapData/height.txt），预览在右侧信息生成栏。"
+                    : "尚未烘焙高度数据（MapData/height.txt 不存在）。",
+                MessageType.None);
         }
 
         /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池 + 邻接组 + 烘焙结果。</summary>
@@ -879,66 +931,62 @@ namespace AiTerrainWorkflow.LayerEditor
                 BakeHeightMap();
             if (GUILayout.Button("清空高度图", GUILayout.Width(120)))
             {
-                _project.heightMap = null;
+                _project.DeleteMap("height");
+                if (_heightPreview != null)
+                    Object.DestroyImmediate(_heightPreview);
+                _heightPreview = null;
                 _project.heightMin = 0f;
                 _project.heightMax = 0f;
                 EditorUtility.SetDirty(_project);
             }
             EditorGUILayout.EndHorizontal();
 
-            if (_project.heightMap != null)
+            if (_heightPreview != null)
             {
                 EditorGUILayout.Space(6);
                 float previewW = Mathf.Min(320f, position.width * 0.5f - 40f);
-                float previewH = previewW * (float)_project.heightMap.height / Mathf.Max(1, _project.heightMap.width);
-                GUILayout.Label(_project.heightMap, GUILayout.Width(previewW), GUILayout.Height(previewH));
+                float previewH = previewW * (float)_heightPreview.height / Mathf.Max(1, _heightPreview.width);
+                GUILayout.Label(_heightPreview, GUILayout.Width(previewW), GUILayout.Height(previewH));
                 EditorGUILayout.LabelField(
                     $"当前范围: [{_project.heightMin:F2}, {_project.heightMax:F2}]", EditorStyles.miniLabel);
             }
         }
 
-        /// <summary>烘焙高度图：生成噪声高度数组 → 记录 min/max → 归一化写入 R 通道 → 保存 PNG。</summary>
+        /// <summary>烘焙高度数据：噪声生成 → min/max → 归一化 float[][] → 写入 MapData "height" → 内存预览。</summary>
         private void BakeHeightMap()
         {
-            if (_project.layerMap == null)
-            {
-                EditorUtility.DisplayDialog("烘焙失败", "尚无层次图。请先在「区域编辑」中绘制并保存层次图。", "确定");
+            EnsurePaintMap();
+            if (_map == null)
                 return;
-            }
             if (_project.layers == null || _project.layers.Count == 0)
             {
                 EditorUtility.DisplayDialog("烘焙失败", "配置中没有层级。", "确定");
                 return;
             }
 
-            int w = _project.layerMap.width;
-            int h = _project.layerMap.height;
+            int w = _map.Width;
+            int h = _map.Height;
             int[] ids = _layerIdsCache;
             if (ids == null || ids.Length != w * h)
             {
-                ids = TerrainRoadGen.ParseLayerIds(_project.layerMap, _project.layers);
+                ids = TerrainRoadGen.ParseLayerIds(_map.Texture, _project.layers);
                 _layerIdsCache = ids;
             }
 
-            var tex = TerrainRoadGen.BakeHeightMap(_project, ids, w, h);
-            if (tex == null)
+            var data = TerrainRoadGen.BakeHeightData(_project, ids, w, h);
+            if (data == null)
             {
                 EditorUtility.DisplayDialog("烘焙失败", "高度图生成失败，请查看 Console 日志。", "确定");
                 return;
             }
 
-            // 保存到配置文件夹
-            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
-            if (string.IsNullOrEmpty(dirRel))
-                return;
-            string fileRel = dirRel + "/heightMap.png";
-            string full = Path.Combine(Application.dataPath, "..", fileRel);
-            File.WriteAllBytes(full, tex.EncodeToPNG());
-            Object.DestroyImmediate(tex);
-            AssetDatabase.Refresh();
-            _project.heightMap = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
+            _project.WriteMap("height", data);
+            if (_heightPreview != null)
+                Object.DestroyImmediate(_heightPreview);
+            _heightPreview = MapDataTextureUtils.ToTexture(data, 0f, 1f);
+            _project.RefreshMapDataRefs(true);
             EditorUtility.SetDirty(_project);
-            Debug.Log($"[Terrain Paint Workflow] 高度图烘焙完成，已保存 {fileRel}，范围 [{_project.heightMin:F2}, {_project.heightMax:F2}]");
+            Debug.Log($"[Terrain Paint Workflow] 高度数据烘焙完成，已写入 MapData/height.txt，范围 [{_project.heightMin:F2}, {_project.heightMax:F2}]");
             Repaint();
         }
 
@@ -955,42 +1003,35 @@ namespace AiTerrainWorkflow.LayerEditor
             if (_map != null)
                 return;
 
-            if (_project.layerMap != null)
+            var data = _project.ReadMap("layerMap");
+            if (data != null && data.Length > 0)
             {
-                string path = AssetDatabase.GetAssetPath(_project.layerMap);
-                string full = Path.Combine(Application.dataPath, "..", path);
-                _map = new LayerMap(2, 2);
-                if (_map.LoadPng(full))
-                {
-                    _newWidth = _map.Width;
-                    _newHeight = _map.Height;
-                }
-                else
-                {
-                    Debug.LogWarning($"[Terrain Paint Workflow] 无法加载层次图 {path}，新建空白画布");
-                    _map = new LayerMap(_newWidth, _newHeight);
-                }
+                _map = new LayerMap(1, 1);
+                _map.LoadFromIdArray(data, _project.layers);
             }
             else
             {
-                _map = new LayerMap(_newWidth, _newHeight);
+                int res = Mathf.Clamp(_project.mapResolution, 128, 1024);
+                _map = new LayerMap(res, res);
             }
         }
 
+        /// <summary>把当前画布写入 MapData "layerMap"（只写文件、不刷新资产；每笔完调用的轻量路径）。</summary>
+        private void PersistLayerMap()
+        {
+            if (_project == null || _map == null)
+                return;
+            _project.WriteMap("layerMap", _map.ToIdArray(_project.layers));
+            _layerIdsCache = null;
+        }
+
+        /// <summary>提交点：写入 layerMap + 刷新资产并重链 txt 引用（切页/切配置/关窗/显式保存时调用）。</summary>
         private void SavePaintMapIfAny()
         {
             if (_project == null || _map == null)
                 return;
-            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
-            if (string.IsNullOrEmpty(dirRel))
-                return;
-            string fileRel = dirRel + "/layerMap.png";
-            string full = Path.Combine(Application.dataPath, "..", fileRel);
-            _map.SavePng(full);
-            AssetDatabase.Refresh();
-            _project.layerMap = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
-            EditorUtility.SetDirty(_project);
-            _layerIdsCache = null;
+            PersistLayerMap();
+            _project.RefreshMapDataRefs(true);
         }
 
         private void DrawPaintToolbar()
@@ -1016,20 +1057,21 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.FlexibleSpace();
 
-            GUILayout.Label("尺寸", EditorStyles.miniLabel);
-            _newWidth = Mathf.Clamp(EditorGUILayout.IntField(_newWidth, GUILayout.Width(48)), 8, 1024);
-            GUILayout.Label("x", EditorStyles.miniLabel);
-            _newHeight = Mathf.Clamp(EditorGUILayout.IntField(_newHeight, GUILayout.Width(48)), 8, 1024);
+            GUILayout.Label($"尺寸 {_project.mapResolution}×{_project.mapResolution}", EditorStyles.miniLabel);
             if (GUILayout.Button("重置画布", EditorStyles.toolbarButton))
             {
-                _map.Resize(_newWidth, _newHeight);
+                _map.Resize(_project.mapResolution, _project.mapResolution);
                 _triPoints.Clear();
+                PersistLayerMap();
                 Repaint();
             }
 
             GUILayout.Space(8);
             if (GUILayout.Button("撤销", EditorStyles.toolbarButton))
-                _map.Undo();
+            {
+                if (_map.Undo())
+                    PersistLayerMap();
+            }
             if (GUILayout.Button("保存层次图", EditorStyles.toolbarButton))
             {
                 SavePaintMapIfAny();
@@ -1267,11 +1309,9 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private void ComputeRgb()
         {
-            if (_project.layerMap == null)
-            {
-                EditorUtility.DisplayDialog("计算失败", "尚无层次图。请先在「区域编辑」子界面绘制并保存层次图。", "确定");
+            EnsurePaintMap();
+            if (_map == null)
                 return;
-            }
             if (_project.layers == null || _project.layers.Count == 0)
             {
                 EditorUtility.DisplayDialog("计算失败", "配置中没有层级（layers 为空）。", "确定");
@@ -1289,35 +1329,54 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
+            int w = _map.Width;
+            int h = _map.Height;
             int[] ids = _layerIdsCache;
-            if (ids == null || ids.Length != _project.layerMap.width * _project.layerMap.height)
+            if (ids == null || ids.Length != w * h)
             {
-                ids = TerrainRoadGen.ParseLayerIds(_project.layerMap, _project.layers);
+                ids = TerrainRoadGen.ParseLayerIds(_map.Texture, _project.layers);
                 _layerIdsCache = ids;
             }
 
-            var tex = TerrainRoadGen.ComputeAll(_project, ids, out _, out _, out _);
+            var tex = TerrainRoadGen.ComputeAll(_project, ids, w, h, out var rArr, out var gArr, out var bArr);
             if (tex == null)
             {
                 Debug.LogError("[Terrain Paint Workflow] 计算失败（详见上方错误日志），已中断。");
                 return;
             }
 
-            // 保存结果图到配置文件夹
-            string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');
-            if (string.IsNullOrEmpty(dirRel))
-                return;
-            string fileRel = dirRel + "/result_RGB.png";
-            string full = Path.Combine(Application.dataPath, "..", fileRel);
-            File.WriteAllBytes(full, tex.EncodeToPNG());
-            AssetDatabase.Refresh();
-            _project.resultTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(fileRel);
+            // 写 MapData：R/G/B 三个 key（不再落 PNG；图片仅作内存预览）
+            _project.WriteMap("distance", CsvArrayCodec.ToJagged(rArr, w, h));
+            _project.WriteMap("occupancy", CsvArrayCodec.ToJagged(gArr, w, h));
+            _project.WriteMap("road", CsvArrayCodec.ToJagged(bArr, w, h));
+            _project.RefreshMapDataRefs(true);
             EditorUtility.SetDirty(_project);
-            _resultPreview = _project.resultTexture;
 
-            Debug.Log($"[Terrain Paint Workflow] RGB 计算完成，已保存 {fileRel}" +
+            if (_resultPreview != null)
+                Object.DestroyImmediate(_resultPreview);
+            _resultPreview = tex;
+
+            Debug.Log($"[Terrain Paint Workflow] 距离场/路网计算完成，已写入 MapData: distance/occupancy/road.txt" +
                       $"（{_project.layers.Count} 层 / {_project.groupMaxD?.Length ?? 0} 个组合层）");
             Repaint();
+        }
+
+        /// <summary>从 MapData 读取 distance/occupancy/road 合成 RGB 预览（仅内存显示用）。</summary>
+        private void LoadResultPreview()
+        {
+            if (_project == null)
+                return;
+            if (!_project.HasMap("distance") || !_project.HasMap("occupancy") || !_project.HasMap("road"))
+                return;
+            var r = _project.ReadMap("distance");
+            var g = _project.ReadMap("occupancy");
+            var b = _project.ReadMap("road");
+            if (r == null || g == null || b == null || r.Length == 0)
+                return;
+            int h = r.Length;
+            int w = r[0].Length;
+            _resultPreview = TerrainRoadGen.ComposeRgb(
+                CsvArrayCodec.ToFlat(r), CsvArrayCodec.ToFlat(g), CsvArrayCodec.ToFlat(b), w, h);
         }
 
         // ---------- ③ 树木编辑（占位） ----------
@@ -1399,7 +1458,10 @@ namespace AiTerrainWorkflow.LayerEditor
             if (e.type == EventType.KeyDown && e.control && e.keyCode == KeyCode.Z)
             {
                 if (_map.Undo())
+                {
+                    PersistLayerMap();
                     Repaint();
+                }
                 e.Use();
                 return;
             }
@@ -1423,6 +1485,7 @@ namespace AiTerrainWorkflow.LayerEditor
                         var c = _triPoints[2];
                         _map.FillTriangle(a.x, a.y, b.x, b.y, c.x, c.y, CurrentLayerColor32);
                         _triPoints.Clear();
+                        PersistLayerMap(); // 三角形画完即写
                     }
                     Repaint();
                     e.Use();
@@ -1464,6 +1527,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     _map.FillRect(_dragStartPx.x, _dragStartPx.y, _dragCurrentPx.x, _dragCurrentPx.y, color);
                 }
 
+                PersistLayerMap(); // 抬笔时写（圆形/直线/矩形均在本处收尾）
                 _dragging = false;
                 GUIUtility.hotControl = 0;
                 Repaint();
