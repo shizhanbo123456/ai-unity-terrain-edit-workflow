@@ -10,11 +10,10 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
     /// 顶层五个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 贴图编辑 / 树木编辑 / 细节编辑。
-    /// 「工作流配置」没有子页签，直接显示：Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）、Terrain 字段（窗口内临时，不入 SO）。
-    /// 其余子界面内部有三个页签：
-    ///   ① 全局配置  显示全局配置 SO（TerrainPaintProjectSO）中该子界面专属的字段（按 Header 划分）
-    ///   ② 层级配置  显示层级配置 SO（LayerConfigSO）中该子界面专属的字段（逐层折叠）
-    ///   ③ 信息生成  原各子界面的核心功能（区域编辑=画布绘制；贴图编辑=距离场/路网计算；其余占位）
+    /// 「工作流配置」整页显示：工作流图（层次图/RGB 图）、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）、Terrain 字段（窗口内临时，不入 SO）。
+    /// 其余编辑子界面为左右分栏布局：
+    ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠）
+    ///   右栏（宽）：信息生成（原各子界面核心功能：区域编辑=画布绘制；贴图编辑=距离场/路网计算；其余占位）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -39,14 +38,6 @@ namespace AiTerrainWorkflow.LayerEditor
             DetailEdit,
         }
 
-        /// <summary>子界面内的三个页签。</summary>
-        private enum SubTab
-        {
-            GlobalConfig,
-            LayerConfig,
-            InfoGen,
-        }
-
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
         public const string ConfigRootDirRelative =
             "Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
@@ -55,7 +46,6 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private TerrainPaintProjectSO _project;
         private MainTab _mainTab = MainTab.WorkflowConfig;
-        private SubTab _subTab = SubTab.GlobalConfig;
 
         /// <summary>工作流配置中填入的 Terrain（仅窗口内临时，不保存到配置 SO）。</summary>
         private Terrain _terrainField;
@@ -64,8 +54,9 @@ namespace AiTerrainWorkflow.LayerEditor
         private bool _creating;
         private string _newConfigName = "";
 
-        // 配置页签 UI 状态（全局/层级共用）
+        // 左侧配置栏 UI 状态（全局配置 / 层级配置 各自独立滚动）
         private Vector2 _configScroll;
+        private Vector2 _layerConfigScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
 
         // 区域编辑子界面状态
@@ -149,30 +140,45 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            // 工作流配置：无子页签，直接显示
+            // 工作流配置：无分栏，直接显示
             if (_mainTab == MainTab.WorkflowConfig)
             {
                 DrawWorkflowConfigView();
                 return;
             }
 
-            DrawSubTabBar();
-            switch (_subTab)
-            {
-                case SubTab.GlobalConfig: DrawGlobalConfigView(); break;
-                case SubTab.LayerConfig: DrawLayerConfigView(); break;
-                case SubTab.InfoGen: DrawInfoGenView(); break;
-            }
+            // 编辑子界面：左右分栏（左=全局/层级配置，右=信息生成）
+            DrawEditSplitView();
         }
 
-        /// <summary>子界面内的三个页签（全局配置 / 层级配置 / 信息生成）。</summary>
-        private void DrawSubTabBar()
+        /// <summary>
+        /// 编辑子界面的左右分栏布局：左侧窄栏依次显示全局配置与层级配置（各自独立滚动），
+        /// 右侧宽栏显示信息生成（原各子界面核心功能）。无需页签切换。
+        /// </summary>
+        private void DrawEditSplitView()
         {
-            var subNames = new[] { "全局配置", "层级配置", "信息生成" };
-            int newSub = GUILayout.Toolbar((int)_subTab, subNames);
-            if (newSub != (int)_subTab)
-                _subTab = (SubTab)newSub;
-            EditorGUILayout.Space(4);
+            const float leftWidth = 360f;
+
+            EditorGUILayout.BeginHorizontal();
+
+            // 左栏（窄）：全局配置 + 层级配置
+            EditorGUILayout.BeginVertical(GUILayout.Width(leftWidth));
+            DrawGlobalConfigView();
+            EditorGUILayout.Space(6);
+            DrawLayerConfigView();
+            EditorGUILayout.EndVertical();
+
+            // 分隔线
+            EditorGUILayout.BeginVertical(GUILayout.Width(6));
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndVertical();
+
+            // 右栏（宽）：信息生成
+            EditorGUILayout.BeginVertical();
+            DrawInfoGenView();
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.EndHorizontal();
         }
 
         private void DrawProjectBar()
@@ -267,7 +273,6 @@ namespace AiTerrainWorkflow.LayerEditor
             _project = project;
             RememberProject();
             _mainTab = MainTab.WorkflowConfig;
-            _subTab = SubTab.GlobalConfig;
             _resultPreview = null;
             _layerIdsCache = null;
             Debug.Log($"[Terrain Paint Workflow] 已创建配置: {dirRel}");
@@ -425,7 +430,9 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private void DrawGlobalConfigView()
         {
-            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+            // 左栏内固定高度（约占窗口 40%），内容超出滚动
+            float h = Mathf.Max(140f, position.height * 0.38f);
+            _configScroll = EditorGUILayout.BeginScrollView(_configScroll, GUILayout.Height(h));
             switch (_mainTab)
             {
                 case MainTab.AreaEdit: DrawAreaGlobalConfig(); break;
@@ -464,7 +471,8 @@ namespace AiTerrainWorkflow.LayerEditor
         private void DrawLayerConfigView()
         {
             EnsureLayerFoldouts();
-            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+            // 左栏内弹性高度（占剩余空间），内容超出滚动
+            _layerConfigScroll = EditorGUILayout.BeginScrollView(_layerConfigScroll, GUILayout.ExpandHeight(true));
             switch (_mainTab)
             {
                 case MainTab.AreaEdit:
