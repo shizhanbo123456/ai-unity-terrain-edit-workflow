@@ -312,6 +312,15 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.LabelField("工作流配置", EditorStyles.boldLabel);
 
+            // 工作流图资产（层次图 / RGB 结果图）
+            EditorGUILayout.LabelField("工作流图", EditorStyles.boldLabel);
+            _project.layerMap = (Texture2D)EditorGUILayout.ObjectField(
+                "层次图（绘画画布）", _project.layerMap, typeof(Texture2D), false);
+            _project.resultTexture = (Texture2D)EditorGUILayout.ObjectField(
+                "计算结果图（RGB）", _project.resultTexture, typeof(Texture2D), false);
+
+            EditorGUILayout.Space(8);
+
             // Layer 数量（2~16）
             int newCount = Mathf.Clamp(
                 EditorGUILayout.IntField("Layer 数量", _project.layers.Count),
@@ -428,21 +437,19 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorUtility.SetDirty(_project);
         }
 
-        /// <summary>区域编辑 · 全局配置：仅显示层次图（绘画画布）。</summary>
+        /// <summary>区域编辑 · 全局配置：暂无（层次图已移至工作流配置页面）。</summary>
         private void DrawAreaGlobalConfig()
         {
             EditorGUILayout.LabelField("区域编辑 · 全局配置", EditorStyles.boldLabel);
-            _project.layerMap = (Texture2D)EditorGUILayout.ObjectField(
-                "层次图（绘画画布）", _project.layerMap, typeof(Texture2D), false);
+            EditorGUILayout.HelpBox(
+                "区域编辑无专属全局配置；层次图（绘画画布）已在「工作流配置」页面中管理。",
+                MessageType.Info);
         }
 
-        /// <summary>贴图编辑 · 全局配置：RGB 结果图 + 随机游走参数 + 全局种子 + TerrainLayer 池。</summary>
+        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池。</summary>
         private void DrawTextureGlobalConfig()
         {
             EditorGUILayout.LabelField("贴图编辑 · 全局配置", EditorStyles.boldLabel);
-            _project.resultTexture = (Texture2D)EditorGUILayout.ObjectField(
-                "计算结果图（RGB）", _project.resultTexture, typeof(Texture2D), false);
-            EditorGUILayout.Space(10);
             DrawGlobalConfig();
             EditorGUILayout.Space(10);
             DrawGlobalTerrainLayers();
