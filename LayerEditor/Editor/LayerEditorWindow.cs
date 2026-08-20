@@ -467,7 +467,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 "高度图", _project.heightMap, typeof(Texture2D), false);
         }
 
-        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池 + 邻接组。</summary>
+        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池 + 邻接组 + 烘焙结果。</summary>
         private void DrawTextureGlobalConfig()
         {
             EditorGUILayout.LabelField("贴图编辑 · 全局配置", EditorStyles.boldLabel);
@@ -476,6 +476,10 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawGlobalTerrainLayers();
             EditorGUILayout.Space(10);
             DrawAdjacencyGroups();
+
+            EditorGUILayout.Space(10);
+            EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField($"R 通道 Max: {_project.rMax:F2}");
         }
 
         /// <summary>邻接组（组合层级分组）编辑器：List&lt;List&lt;int&gt;&gt;，同一层级不可跨组重复。</summary>

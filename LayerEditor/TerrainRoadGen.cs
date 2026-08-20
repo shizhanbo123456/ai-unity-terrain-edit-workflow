@@ -396,6 +396,17 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
             }
 
+            // R 通道归一化：计算全局 max 并归一化 r（恢复：r = R * rMax）
+            float rMax = 0f;
+            for (int i = 0; i < r.Length; i++)
+                if (r[i] > rMax) rMax = r[i];
+            project.rMax = rMax;
+            if (rMax > 0f)
+            {
+                for (int i = 0; i < r.Length; i++)
+                    r[i] = r[i] / rMax;
+            }
+
             rOut = r;
             gOut = g;
             bOut = b;

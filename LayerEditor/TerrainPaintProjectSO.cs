@@ -118,6 +118,9 @@ namespace AiTerrainWorkflow.LayerEditor
         [HideInInspector, Tooltip("各组合层级的距离场全局最大值（自动计算）")]
         public float[] groupMaxD;
 
+        [HideInInspector, Tooltip("R 通道距离场数组的全局最大值（自动计算；R 通道归一化用 r/rMax，恢复 r = R*rMax）")]
+        public float rMax;
+
         [Tooltip("计算结果图（RGB：R=距离场，G=占用/间隔，B=路面掩码）")]
         public Texture2D resultTexture;
 
