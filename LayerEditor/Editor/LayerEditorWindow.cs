@@ -450,13 +450,68 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.Info);
         }
 
-        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池。</summary>
+        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池 + 邻接组。</summary>
         private void DrawTextureGlobalConfig()
         {
             EditorGUILayout.LabelField("贴图编辑 · 全局配置", EditorStyles.boldLabel);
             DrawGlobalConfig();
             EditorGUILayout.Space(10);
             DrawGlobalTerrainLayers();
+            EditorGUILayout.Space(10);
+            DrawAdjacencyGroups();
+        }
+
+        /// <summary>邻接组（组合层级分组）编辑器：List&lt;List&lt;int&gt;&gt;，同一层级不可跨组重复。</summary>
+        private void DrawAdjacencyGroups()
+        {
+            EditorGUILayout.LabelField("邻接组（组合层级分组）", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "每个组是一个层级索引列表（如 {1,2,3}）。同一层级不可出现在多个组中，否则下方会报 Error 且计算被阻断。",
+                MessageType.None);
+
+            var groups = _project.adjacencyGroups;
+            for (int gi = 0; gi < groups.Count; gi++)
+            {
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField($"组 {gi}", EditorStyles.boldLabel);
+                if (GUILayout.Button("删除组", GUILayout.Width(60)))
+                {
+                    groups.RemoveAt(gi--);
+                    continue;
+                }
+                EditorGUILayout.EndHorizontal();
+
+                var group = groups[gi];
+                for (int i = 0; i < group.Count; i++)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    group[i] = Mathf.Clamp(
+                        EditorGUILayout.IntField($"层级[{i}]", group[i]),
+                        0, Mathf.Max(0, _project.layers.Count - 1));
+                    if (GUILayout.Button("-", GUILayout.Width(20)))
+                        group.RemoveAt(i--);
+                    EditorGUILayout.EndHorizontal();
+                }
+                if (GUILayout.Button($"+ 添加层级到组 {gi}"))
+                    group.Add(0);
+                EditorGUILayout.EndVertical();
+            }
+
+            if (GUILayout.Button("+ 添加邻接组"))
+                groups.Add(new List<int>());
+
+            EditorGUILayout.Space(4);
+
+            // 冲突检查：同一层级出现在多个组 → Error 提示
+            var dups = _project.FindDuplicateLayerIndices();
+            if (dups.Count > 0)
+            {
+                string names = string.Join(", ", dups.ConvertAll(i => $"Layer{i}"));
+                EditorGUILayout.HelpBox(
+                    $"以下层级被加入多个邻接组（将导致计算被阻断）: {names}",
+                    MessageType.Error);
+            }
         }
 
         /// <summary>树木编辑 · 全局配置：树木/植被 Prefab 池。</summary>
@@ -632,29 +687,7 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawWeightList(layer.roadLayerWeights, _project.roadTerrainLayers, "道路");
             EditorGUILayout.EndVertical();
 
-            EditorGUILayout.Space(2);
-
-            // ④ 可邻接层级
-            EditorGUILayout.BeginVertical("box");
-            EditorGUILayout.LabelField("可邻接层级（组合分组）", EditorStyles.boldLabel);
-            DrawIntList(layer.adjLayers);
-            EditorGUILayout.EndVertical();
-
             EditorUtility.SetDirty(layer);
-        }
-
-        private void DrawIntList(List<int> list)
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                EditorGUILayout.BeginHorizontal();
-                list[i] = Mathf.Clamp(EditorGUILayout.IntField($"层级[{i}]", list[i]), 0, _project.layers.Count - 1);
-                if (GUILayout.Button("-", GUILayout.Width(20)))
-                    list.RemoveAt(i--);
-                EditorGUILayout.EndHorizontal();
-            }
-            if (GUILayout.Button("+ 添加邻接层"))
-                list.Add(0);
         }
 
         // ---------- ① 区域编辑 ----------
@@ -1006,6 +1039,17 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorUtility.DisplayDialog("计算失败", "配置中没有层级（layers 为空）。", "确定");
                 return;
             }
+            // 邻接组冲突检查：同一层级出现在多个组 → 阻断计算
+            var dups = _project.FindDuplicateLayerIndices();
+            if (dups.Count > 0)
+            {
+                string names = string.Join(", ", dups.ConvertAll(i => $"Layer{i}"));
+                EditorUtility.DisplayDialog(
+                    "计算失败",
+                    $"邻接组配置错误：以下层级被加入多个组，计算已阻断。\n{names}\n\n请到「贴图编辑 · 全局配置」的邻接组中修正。",
+                    "确定");
+                return;
+            }
 
             int[] ids = _layerIdsCache;
             if (ids == null || ids.Length != _project.layerMap.width * _project.layerMap.height)
@@ -1015,6 +1059,11 @@ namespace AiTerrainWorkflow.LayerEditor
             }
 
             var tex = TerrainRoadGen.ComputeAll(_project, ids, out _, out _, out _);
+            if (tex == null)
+            {
+                Debug.LogError("[Terrain Paint Workflow] 计算失败（详见上方错误日志），已中断。");
+                return;
+            }
 
             // 保存结果图到配置文件夹
             string dirRel = Path.GetDirectoryName(AssetDatabase.GetAssetPath(_project))?.Replace('\\', '/');

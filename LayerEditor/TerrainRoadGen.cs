@@ -40,52 +40,46 @@ namespace AiTerrainWorkflow.LayerEditor
             return ids;
         }
 
-        // ---------- 组合层级分组（adjLayers 传递闭包；仅 generateRoad=true 层参与） ----------
+        // ---------- 组合层级分组（全局 adjacencyGroups；仅 generateRoad=true 层参与） ----------
 
-        public static List<List<int>> GroupLayers(List<LayerConfigSO> layers)
+        /// <summary>
+        /// 按全局邻接组（project.adjacencyGroups）分组，返回有效组合层组。
+        /// 仅保留 generateRoad=true 的层；未出现在任何组中的有效层自动单独成组。
+        /// 注：重复出现在多个组中的层会被跳过（冲突应在调用前用 project.HasAdjacencyConflict 检查并阻断）。
+        /// </summary>
+        public static List<List<int>> GroupLayers(TerrainPaintProjectSO project)
         {
+            var layers = project.layers;
             int n = layers.Count;
-            var adj = new bool[n, n];
-            for (int i = 0; i < n; i++)
-                adj[i, i] = true;
-            for (int i = 0; i < n; i++)
+            var groups = new List<List<int>>();
+            var seen = new bool[n];
+
+            foreach (var group in project.adjacencyGroups)
             {
-                if (layers[i] == null || !layers[i].generateRoad)
-                    continue;
-                foreach (var j in layers[i].adjLayers)
+                if (group == null) continue;
+                var g = new List<int>();
+                foreach (var idx in group)
                 {
-                    if (j >= 0 && j < n && layers[j] != null && layers[j].generateRoad)
-                    {
-                        adj[i, j] = true;
-                        adj[j, i] = true;
-                    }
+                    if (idx < 0 || idx >= n) continue;
+                    if (layers[idx] == null || !layers[idx].generateRoad) continue;
+                    if (seen[idx]) continue; // 已归入前面组（冲突），跳过避免重复计算
+                    g.Add(idx);
+                    seen[idx] = true;
+                }
+                if (g.Count > 0)
+                {
+                    g.Sort();
+                    groups.Add(g);
                 }
             }
-            // 传递闭包（n 很小，Floyd 足够）
-            for (int k = 0; k < n; k++)
-                for (int i = 0; i < n; i++)
-                    if (adj[i, k])
-                        for (int j = 0; j < n; j++)
-                            if (adj[k, j])
-                                adj[i, j] = true;
 
-            var groups = new List<List<int>>();
-            var visited = new bool[n];
+            // 未出现在任何组中的有效层：单独成组
             for (int i = 0; i < n; i++)
             {
-                if (visited[i] || layers[i] == null || !layers[i].generateRoad)
-                    continue;
-                var g = new List<int>();
-                for (int j = 0; j < n; j++)
+                if (layers[i] != null && layers[i].generateRoad && !seen[i])
                 {
-                    if (adj[i, j])
-                    {
-                        g.Add(j);
-                        visited[j] = true;
-                    }
+                    groups.Add(new List<int> { i });
                 }
-                g.Sort();
-                groups.Add(g);
             }
             return groups;
         }
@@ -359,13 +353,26 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // ---------- 一键计算（多组合层） ----------
 
-        /// <summary>解析层ID并按全部组合层计算 R/G/B，返回合成 RGB 图。</summary>
+        /// <summary>解析层ID并按全部组合层计算 R/G/B，返回合成 RGB 图。若邻接组存在重复层级则报错返回 null。</summary>
         public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds,
             out float[] rOut, out float[] gOut, out float[] bOut)
         {
+            rOut = null;
+            gOut = null;
+            bOut = null;
+
+            // 邻接组冲突检查：同一层级出现在多个组 → 阻断计算
+            var dups = project.FindDuplicateLayerIndices();
+            if (dups.Count > 0)
+            {
+                Debug.LogError(
+                    $"[Terrain Road Gen] 邻接组配置错误：以下层级被加入多个邻接组，已阻断计算：{string.Join(", ", dups)}");
+                return null;
+            }
+
             int w = project.layerMap.width;
             int h = project.layerMap.height;
-            var groups = GroupLayers(project.layers);
+            var groups = GroupLayers(project);
 
             var r = new float[w * h];
             var g = new float[w * h];

@@ -83,6 +83,9 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
         public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
 
+        [Tooltip("邻接组（组合层级分组）：每个组是一个层级索引列表，如 {{1,2,3},{4,5}}。同一层级不可出现在多个组中（会校验报错）。")]
+        public List<List<int>> adjacencyGroups = new List<List<int>>();
+
         // ---------- 树木编辑 ----------
 
         [Header("树木编辑")]
@@ -143,6 +146,32 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (weights[i] > 0) result.Add(i);
             return result;
         }
+
+        /// <summary>
+        /// 检测被加入多个邻接组的层级索引（出现于 ≥2 个组）。返回值升序；空列表 = 无冲突。
+        /// </summary>
+        public List<int> FindDuplicateLayerIndices()
+        {
+            var count = new Dictionary<int, int>();
+            foreach (var group in adjacencyGroups)
+            {
+                if (group == null) continue;
+                foreach (var idx in group)
+                {
+                    if (idx < 0) continue;
+                    count.TryGetValue(idx, out int c);
+                    count[idx] = c + 1;
+                }
+            }
+            var dup = new List<int>();
+            foreach (var kv in count)
+                if (kv.Value > 1) dup.Add(kv.Key);
+            dup.Sort();
+            return dup;
+        }
+
+        /// <summary>是否存在层级被加入多个邻接组。</summary>
+        public bool HasAdjacencyConflict => FindDuplicateLayerIndices().Count > 0;
     }
 }
 #endif

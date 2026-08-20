@@ -42,7 +42,7 @@ ModelFeatures.md                # 模型特征记录（常用预制体的类型/
 
 | 子界面 | 功能 |
 |---|---|
-| ① 配置修改 | 全局参数（随机游走/贴图混合/坐标换算）+ 逐层参数（贴图列表与种子、generateRoad、roadWidth、roadSpacingMin、roadFinalRemap、adjLayers）。**层名与颜色只读**，需在 Project 面板中修改对应 `LayerConfigSO` 资产 |
+| ① 配置修改 | 全局参数（随机游走/贴图混合/坐标换算/种子/TerrainLayer 池/邻接组）+ 逐层参数（权重列表、generateRoad、roadWidth、roadSpacingMin、roadFinalRemap）。**层名与颜色只读**，需在 Project 面板中修改对应 `LayerConfigSO` 资产 |
 | ② 绘画 | 层次图绘制（圆形画笔/矩形/三角填充 + 擦除；撤销；保存为配置文件夹内 `layerMap.png`）。图层颜色/名称从 16 个层级 SO 读取 |
 | ③ 贴图编辑 | TerrainLayer 列表 + layer×TerrainLayer 矩阵（每格「自然/道路」双复选框）；「计算距离场 + 路网」一键跑完整链路，结果保存为 `result_RGB.png` 并预览 |
 | ④ 应用 | 占位（下一阶段：传入 Terrain，写入 TerrainLayer 并烘焙 splatmap） |
@@ -60,7 +60,7 @@ ModelFeatures.md                # 模型特征记录（常用预制体的类型/
 链路（详见桌面设计文档《混合距离场与路面生成工具_设计文档(2).md》）：
 
 1. **层ID解析** `ParseLayerIds`：层次图颜色 → 层ID 整数数组（颜色解析只此一步，后续流程不接触颜色）。
-2. **组合层级分组** `GroupLayers`：以 `adjLayers` 做传递闭包（仅 `generateRoad=true` 层），得到互不相交的组合层级。
+2. **组合层级分组** `GroupLayers`：按全局 `adjacencyGroups`（`List<List<int>>` 邻接组）分组（仅 `generateRoad=true` 层）；未出现在任何组的有效层自动单独成组；同一层级跨组重复会报 Error 并阻断计算。
 3. **距离场 R** `ComputeR`：对组合层区域做 Felzenszwalb 欧氏距离变换，`maxD` 自动归一化 → R∈[0,1]（边界 0 / 最深内陆 1），区域外 0。
 4. **随机游走** `GenerateRoads`：每个组合层独立生成路网——候选点必须在起点同组合层（跨组跳过）；按 R 加权选点；**防卷曲**（锚点与新点距离 > `gApplySpacing` 才批量回填 G 胶囊，半径 = 沿途所在层 `roadSpacingMin`）；闭环合并（末点附近历史点接入网络）；结束对路径所有边统一填 B 胶囊（半径 = 所在层 `roadWidth`）。G = 占用/间隔缓冲（防绕圈 + 密度控制），B = 路面硬掩码。
 5. **合成** `ComposeRgb`：一张 RGB 图（R=距离场红，G=占用绿，B=路面蓝），结果存 `result_RGB.png`。

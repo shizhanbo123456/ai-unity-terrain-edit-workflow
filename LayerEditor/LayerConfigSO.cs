@@ -7,10 +7,11 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 单个层级配置（每个层级一个 SO 资产，由总 SO TerrainPaintProjectSO 持有）。
     ///
-    /// 层级数量固定 16 个。字段按四个子界面用 Header 划分专属配置：
+    /// 层级数量 2~16（Layer0 恒为透明过渡层）。字段按四个子界面用 Header 划分专属配置：
     ///   - 区域编辑：颜色（层次图该层像素颜色）与名称（语义文本）——只读，需在 Inspector 修改
     ///   - 贴图编辑：自然/道路 TerrainLayer 权重列表 + 道路生成参数（用于信息生成计算）
     ///   - 树木编辑 / 细节编辑：暂无（后续阶段扩展）
+    /// 注：邻接层级（组合分组）已移至全局配置 TerrainPaintProjectSO.adjacencyGroups。
     /// </summary>
     public class LayerConfigSO : ScriptableObject
     {
@@ -38,8 +39,6 @@ namespace AiTerrainWorkflow.LayerEditor
         public float roadSpacingMin = 4f;
         [Tooltip("烘焙时对 R 的重映射曲线（不作用于 B）")]
         public AnimationCurve roadFinalRemap = AnimationCurve.Linear(0f, 0f, 1f, 1f);
-        [Tooltip("可邻接层级索引（0 基，用于组合层级分组）")]
-        public List<int> adjLayers = new List<int>();
 
         // ---------- 树木编辑（暂无） ----------
 
