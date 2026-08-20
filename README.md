@@ -1,94 +1,161 @@
 # AiTerrainWorkflow
 
-AI 地形编辑工作流 —— 独立工具仓库，存放地形编辑相关的算法与工具类。
+AI 地形编辑流水线 —— 配置驱动的 AI 地形生成工具。Unity Editor 内闭环完成创作，`unity-python-bridge` 仅作按需外围工具。
 
-C# 代码统一使用命名空间 `AiTerrainWorkflow`。
+C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量，手动维护）。
+
+> 状态标签说明：**[已完成]** = 已实现并可用；**[待开发]** = 已规划、尚未实现；**[待设计]** = 方向已定、细节待设计；**[暂留空]** = 预留位置、内容待填充。
+
+## 设计原则
+
+| 原则 | 说明 |
+|---|---|
+| 配置驱动 | 工作流最终产出 = **引用美术/模型素材的配置数据**（主配置 `TerrainPaintProjectSO`）；中间图（layerMap/RGB/heightMap）仅为编辑期可视化，**不再是交付物** |
+| 数据优先 | 栅格数据一律以 `float[][]` 为最终形态，存为 CSV txt（MapData）；**运行时只读 float[][]，图片仅供人看** |
+| 构建端分离 | 运行时/编辑器靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/植被/树 + 实例化摆件） |
+| bridge 按需 | `unity-python-bridge` 只是按需取用的外围工具（量尺寸/截图/可选一键构建），**不参与主链路** |
+
+## 完整工作流
+
+```
+素材准备 → ①区域编辑 → ②高度 → ③贴图 → ④树木 → ⑤细节 → ⑥摆件 → 烘焙主配置 → ⑦TerrainBuilder 构建 → ⑧运行时/交付
+```
+
+| 阶段 | 输入 | 处理 | 产出（载体） | 状态 |
+|---|---|---|---|---|
+| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 建素材池；bridge 量尺寸/截预览 | 素材池 + ModelFeatures | 池 **[已完成]**；摆件池/测量回流 **[待设计]** |
+| 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
+| 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 归一化 | `height`（MapData）+ min/max | **[已完成]** |
+| 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 | `distance/occupancy/road`（MapData） | **[已完成]** |
+| 4 树木编辑 | layerMap + 树池 + 规则 | 规则 → 密度图/实例 | `treeDensity` + treeRules | **[待开发]**（子界面为占位） |
+| 5 细节编辑 | layerMap + 细节池 + 规则 | 规则 → 密度图 | `detailDensity` + detailRules | **[待开发]**（子界面为占位） |
+| 6 摆件编辑 | layerMap + ObjectGroup + 规则 | 均匀撒点 + 过滤 + 贴地 | placedObjects 实例列表（结构化字段） | **[待开发]**（规则字段 **[暂留空]**） |
+| 7 构建 | 主配置（SO + 全部 MapData） | TerrainBuilder 七步构建 | 真实 TerrainData + 摆件 GameObject | **[待开发]**（alphamap 算法 **[待设计]**） |
+| 8 运行时 | 主配置（TextAsset → float[][]） | 动态构建 / 加载已烘焙场景 | 运行时地形 | **[待设计]** |
+
+## 阶段详述
+
+### 阶段 0 · 素材准备 [池：已完成；摆件池/测量回流：待设计]
+
+- 已有素材池（全局，写入主配置）：`naturalTerrainLayers`（自然 TerrainLayer）、`roadTerrainLayers`（道路 TerrainLayer）、`treePrefabs`（树）、`detailPrefabs`（细节）。
+- **[待开发]** 摆件池：复用 `ObjectGroup`（groupName + GameObject 列表）。
+- **[待设计]** bridge 按需测量：`mesh.bounds --placed` 量取素材尺寸写回 `ModelFeatures.md`；`prefab.screenshot` 生成缩略图供窗口显示。
+
+### 阶段 1 · 区域编辑 [已完成]
+
+- 画布尺寸 = 主配置 `mapResolution`（创建配置时单选 128/256/512/1024；工作流配置页可改，改动后需重新绘制/烘焙）。
+- 绘制工具：圆形画笔（单击/拖拽直线条带）、矩形填充、三角形填充、擦除、撤销（32 步）。
+- **每画完一笔即写 `MapData/layerMap.txt`**：直线=抬笔时；矩形/三角=画出完整图形后；撤销后同步写。
+- Layer0 恒为透明过渡层，其余 15 个预设色可改颜色/名称（颜色解析为层 ID 只此一步，后续流程不接触颜色）。
+
+### 阶段 2 · 高度编辑 [已完成]
+
+- 逐像素按所在层的 `heightRange`，用 Perlin 噪声（`heightSeed` + `heightScale` 频率）插值生成高度。
+- 统计实际 min/max 写入主配置 `heightMin/heightMax`；归一化到 [0,1] 后写入 `MapData/height.txt`（float[][]）。
+- 恢复公式：`h = r * (max - min) + min`。预览图由窗口用 `MapDataTextureUtils.ToTexture` 生成，**不落盘**。
+
+### 阶段 3 · 贴图编辑 [已完成]
+
+- 链路：`ParseLayerIds`（色→层ID）→ `GroupLayers`（邻接组，冲突阻断）→ `ComputeR`（Felzenszwalb 欧氏距离场，全局 rMax 归一化）→ `GenerateRoads`（随机游走，G=占用/间隔缓冲，B=路面硬掩码）。
+- 结果写入三个 MapData key：`distance`（R）/ `occupancy`（G）/ `road`（B）。
+- **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。
+
+### 阶段 4 · 树木编辑 [待开发]（当前子界面为占位）
+
+- 规划：每层 `treeRules[]`：`{ treePrefab(池引用), weight, density, scaleMin/Max, slopeLimit°, heightRangeFilter }`。
+- 产出形态 **[待拍板]**：密度图 `treeDensity`（float[][]，构建时按种子撒点，可复现、数据小，推荐）或烘焙实例列表 `treeInstances`（精确可控、体积大）。
+
+### 阶段 5 · 细节编辑 [待开发]（当前子界面为占位）
+
+- 规划：每层 `detailRules[]`：`{ detailPrototype(池引用), weight, density(0~16), noiseScale }` → `detailDensity`（MapData）。
+
+### 阶段 6 · 摆件编辑 [待开发]（规则字段暂留空）
+
+- 规划：每层 `propRules[]`：`{ objectGroup, count/密度, spacingMin, alignToTerrain, randomRotation, scaleRange, slopeLimit }`。
+- 生成：`UniformPointGenerator`（网格抖动均匀分布）在层掩码内生成候选 → 过滤（层内/间距/坡度）→ 贴地（高度图插值或射线）→ `placedObjects: List<{prefab, pos, rot, scale}>`（结构化字段，**不进 MapData**，非二维栅格）。
+
+### 阶段 7 · TerrainBuilder 构建 [待开发]（alphamap 算法待设计）
+
+规划七步：
+
+```
+1 PrepareTerrain  尺寸/分辨率/材质（terrainSpec）
+2 ApplyHeight     SetHeights(height 数据)
+3 ApplyAlphamap   ⭐构建时生成权重（见下）
+4 ApplyDetail     按 detailDensity/规则 → SetDetailLayer
+5 ApplyTrees       按 treeDensity/规则 → SetTreeInstances
+6 PlaceProps       按 placedObjects/规则 → 实例化 GameObject
+7 PostProcess      碰撞、静态标记、光照贴图参数
+```
+
+- 双模式：**编辑器烘焙**（写 TerrainData 资产，可保存，为推荐主路径）/ **运行时构建**（Awake 动态构建，程序化场景）。
+- **ApplyAlphamap 草案**：逐像素 `L = layerMap[p]`，`base = road[p]>0.5 ? roadLayerWeights[L] : naturalLayerWeights[L]`；对权重>0 的层叠加独立 Perlin 噪声打破条带（`w[i] = base[i] × (1 - blendSoft + blendSoft × n)`），可选按 `distance` 做层边界渐变，归一化 Σw=1 → SetAlphamaps。参数（seed 策略 / noiseScale / blendSoft / 是否距离场过渡）**[待设计]**。
+
+### 阶段 8 · 运行时 [待设计]
+
+- 运行时只读 float[][]（主配置 `mapDataFiles` 持 TextAsset 引用，随构建打包）；图片永不参与运行时。
+- 形态 **[待设计]**：加载已烘焙场景（零构建开销）或 TerrainBuilder 运行时动态构建。
+
+## MapData 存储层 [已完成]
+
+- 接口（主配置 `TerrainPaintProjectSO` 上）：`ReadMap(key)→float[][]` / `WriteMap(key, float[][])` / `DeleteMap(key)` / `HasMap(key)`。
+- 文件：`Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs/<配置>/MapData/{key}.txt`。
+- 格式：CSV，手写解析（无第三方库）。首行元数据头 `#key=...;w=...;h=...`（解析器跳过 `#` 行）；数值 **F3 三位小数**、InvariantCulture（跨平台一致）。
+- 引用：主配置持 `mapDataFiles`（`key + TextAsset`），随 SO 打进构建；**编辑器读直接读磁盘文件（保最新）**，**运行时走 TextAsset**。
+- 辅助：`MapDataTextureUtils`（float[][]↔Texture2D，仅编辑期显示/采集）。
+- key 约定：`layerMap / height / distance / occupancy / road` **[已完成]**；`treeDensity / detailDensity` **[待开发]**。
 
 ## 目录结构
 
 ```
 Utils/
-├── UniformPointGenerator.cs    # 均匀分布随机点生成（网格抖动 Jittered Grid）
-└── ObjectGroup.cs              # ObjectGroup ScriptableObject（组名 + GameObject 列表）
+├── UniformPointGenerator.cs    [已完成] 均匀分布随机点（网格抖动 Jittered Grid，确定性种子可复现）
+└── ObjectGroup.cs              [已完成] 摆件组 SO（groupName + GameObject 列表，供摆件编辑复用）
 
-LayerEditor/                    # 地形贴图工作流（层次图 → 高度图 → 距离场 → 路网 → 贴图/树木/细节）
-├── LayerMap.cs                 # 层图数据：CPU 读写图片 + 圆形/矩形/三角绘制算法
-├── LayerPalette.cs             # 层级预设色：15 个内置色 + 默认名称（Layer0 恒为透明）
-├── LayerConfigSO.cs            # 每层一个的层级配置 SO（颜色/名称 + 各子界面权重 + 道路/高度参数）
-├── TerrainPaintProjectSO.cs    # 总配置 SO（全局配置 + 层级 SO 列表 + 各池 + 邻接组 + 结果）
-├── TerrainRoadGen.cs           # 核心算法：层ID解析/邻接组分/距离场R/随机游走G+B/RGB合成/高度烘焙
+LayerEditor/
+├── CsvArrayCodec.cs            [已完成] MapData CSV 手写编解码（元数据头 / F3 / ToJagged / ToFlat）
+├── MapDataStore.cs             [已完成] MapData/{key}.txt 文件 IO（写/读/删/存在性）
+├── LayerMap.cs                 [已完成] 层图绘制核心（画布 ↔ 层ID float[][]，撤销/填充/线条）
+├── LayerPalette.cs             [已完成] 15 预设色（Layer0 恒透明）
+├── LayerConfigSO.cs            [已完成] 每层配置（颜色/名称/权重/高度范围/道路参数）
+├── TerrainPaintProjectSO.cs    [已完成] 主配置（素材池/规则/邻接组/mapResolution/mapDataFiles + MapData 接口）
+├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
+├── TerrainBuilder.cs           [暂留空] 构建组件（阶段 7，待开发）
 └── Editor/
-    └── LayerEditorWindow.cs    # 六子界面工作流窗口（Tools / Terrain Edit Workflow / Open Terrain Paint Workflow）
+    ├── LayerEditorWindow.cs    [已完成] 工作流窗口（六子界面 + 创建向导尺寸单选 + MapData 接线）
+    └── MapDataTextureUtils.cs  [已完成] float[][]↔Texture2D（仅显示/采集）
 
 Editor/
-└── TerrainEditWorkflowMenu.cs  # 菜单栏工具（Tools / Terrain Edit Workflow）
+└── TerrainEditWorkflowMenu.cs  [已完成] 菜单入口（Tools / Terrain Edit Workflow）
 
-TerrainGeneratorConfigs/        # 本地配置资产（每个配置一个子文件夹，全部不进版本库，见 .gitignore）
-ModelFeatures.md                # 模型特征记录（常用预制体的类型/尺寸/外形/方向，供地形搭建参考）
+TerrainGeneratorConfigs/        [暂留空] 本地配置资产（gitignored；每个配置一个子文件夹 + MapData/）
+ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用 bridge `mesh-bounds --placed` 量取）
 ```
 
-## 菜单栏工具（Tools / Terrain Edit Workflow）
+## 菜单与窗口 [已完成]
 
-| 菜单项 | 功能 |
-|---|---|
-| `Log Version` | Console 打印当前工具版本号 |
-| `Open Terrain Paint Workflow` | 打开地形贴图工作流窗口 |
+- `Tools / Terrain Edit Workflow / Log Version`：打印版本号。
+- `Tools / Terrain Edit Workflow / Open Terrain Paint Workflow`：打开工作流窗口。
+- 窗口六个子界面：工作流配置（含栅格分辨率） / 区域编辑 / 高度编辑 / 贴图编辑 / 树木编辑 **[占位]** / 细节编辑 **[占位]**。
 
-版本号写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量中（当前 **v1.3**）；有变更时手动同步更新。
+## 与 unity-python-bridge 的关系 [按需]
 
-## 地形贴图工作流窗口（六子界面）
+- bridge **不参与主链路**，只做按需外围：`mesh.bounds --placed`（量素材尺寸写 ModelFeatures）、`prefab.screenshot`（缩略图）、`terrain.*`（直接读写真实 TerrainData 的命令行通道，共 19 条）。
+- 工作流产出高度数据（归一化 0~1）与 bridge `terrain.set_heights` 的 `data` 格式**直接兼容**。
+- **[待设计]** 可选增强：把 `TerrainBuilder.Build` 暴露为 bridge 命令（如 `terrainbuilder.build <配置名>`），实现 Python 端一键构建。
+- 主链路不依赖 bridge，关掉一切照常。
 
-改造自原 LayerEditor 绘画窗口。**窗口本身不存储持久数据**——所有信息从总 SO（`TerrainPaintProjectSO`）加载，修改直接写入 SO；编辑器顶部 ObjectField 选择/创建配置（EditorPrefs 记住上次使用的配置）。
+## 实施里程碑
 
-顶部工具栏（靠右）依次为：**工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 树木编辑 / 细节编辑**。
+- **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
+- **M2 [待开发]** 树木 / 细节 / 摆件三个子界面（规则编辑 + 密度图/实例烘焙）。
+- **M3 [待开发]** TerrainBuilder 组件（编辑器烘焙 + 运行时构建 + 构建时 alphamap 噪声生成）。
+- **M4 [待设计]** bridge 可选集成（一键构建命令）。
 
-| 子界面 | 布局 | 内容 |
-|---|---|---|
-| ① 工作流配置 | 整页（无分栏） | 工作流图（层次图 / RGB 结果图）、Layer 数量（2~16）、各层颜色/名称编辑（**Layer0 颜色锁定为完全透明**）、Terrain 字段（仅窗口内临时，不入 SO） |
-| ② 区域编辑 | 左右分栏 | 左：全局配置（层次图已在工作流配置管理，此处占位提示）+ 层级配置（颜色/名称只读）；右：层次图画布绘制（圆形/矩形/三角 + 擦除 + 撤销） |
-| ③ 高度编辑 | 左右分栏 | 左：全局配置（高度 seed/scale + 烘焙结果只读 min/max/图）+ 层级配置（每层高度范围 Vector2）；右：**烘焙高度图** |
-| ④ 贴图编辑 | 左右分栏 | 左：全局配置（随机游走参数 + 贴图种子 + 自然/道路 TerrainLayer 池 + **邻接组** + R 通道 Max 只读）+ 层级配置（贴图混合权重 + 道路生成参数）；右：**计算距离场 + 路网**（RGB） |
-| ⑤ 树木编辑 | 左右分栏 | 左：全局配置（树木 Prefab 池）+ 层级配置（每层树木生成权重）；右：占位（后续实现树木放置） |
-| ⑥ 细节编辑 | 左右分栏 | 左：全局配置（细节 Prefab 池）+ 层级配置（每层细节生成权重）；右：占位（后续实现细节放置） |
+## 待拍板事项
 
-**左右分栏说明**：编辑子界面左侧窄栏为「全局配置 + 层级配置」拼成的整体（**共同滚动**），右侧宽栏为「信息生成」（该子界面的核心功能），无需页签切换。
-
-**创建新地形配置**：输入名称后自动创建 `TerrainGeneratorConfigs/<名称>/` 子文件夹，内含总 SO + 默认 16 个层级 SO（Layer0 透明 + 其余 15 色取自 LayerPalette 预设），Layer 数量可在工作流配置中调整为 2~16。
-
-## 配置架构（ScriptableObject）
-
-- **总 SO（`TerrainPaintProjectSO`）**——字段按子界面用 Header 划分：
-  - 通用：`layers`（层级 SO 列表，2~16 个）
-  - 区域编辑：`layerMap`（层次图）
-  - 高度编辑：`heightSeed` / `heightScale`（噪声参数）、`heightMin` / `heightMax`（烘焙自动写入）、`heightMap`（高度图）
-  - 贴图编辑：`config`（`TerrainPaintConfig`：roadStep / walkStartTries / walkCandidateCount / startCoverStopSamples / walkSeed / maxStepsPerPath / gApplySpacing / noiseScale / worldPerPixel）、`naturalSeed` / `roadSeed`、`naturalTerrainLayers` / `roadTerrainLayers`（两个 TerrainLayer 池）、`adjacencyGroups`（`List<List<int>>` 邻接组）
-  - 树木编辑：`treePrefabs`（Prefab 池）
-  - 细节编辑：`detailPrefabs`（Prefab 池）
-  - 计算结果：`groupMaxD`（每组合层距离场最大值）、`rMax`（R 通道全局最大值）、`resultTexture`（RGB 结果图）
-- **层级 SO（`LayerConfigSO`）**——每个层级一个：
-  - 区域编辑：`color` / `layerName`（**只能在 Inspector 修改**）
-  - 贴图编辑：`naturalLayerWeights` / `roadLayerWeights`（权重列表，索引 = 对应 TL 池 id，值 = 权重，0 = 不纳入）、`generateRoad`、`roadWidth`、`roadSpacingMin`、`roadFinalRemap`
-  - 高度编辑：`heightRange`（Vector2，min/max）
-  - 树木编辑：`treeWeights`；细节编辑：`detailWeights`（索引 = 对应 Prefab 池 id，值 = 生成权重，0 = 不生成）
-- **存储**：全部配置资产在 `LayerEditor/TerrainGeneratorConfigs/` 下按配置分子文件夹，**本地项目数据，不进版本库**（`.gitignore` 忽略）。
-
-## 核心算法（TerrainRoadGen）
-
-链路（详见桌面设计文档《混合距离场与路面生成工具_设计文档(2).md》）：
-
-1. **层ID解析** `ParseLayerIds`：层次图颜色 → 层ID 整数数组（颜色解析只此一步，后续流程不接触颜色）。
-2. **组合层级分组** `GroupLayers`：按全局 `adjacencyGroups`（`List<List<int>>` 邻接组）分组（仅 `generateRoad=true` 层）；未出现在任何组的有效层自动单独成组；**同一层级跨组重复会报 Error 并阻断计算**。
-3. **距离场 R** `ComputeR`：对组合层区域做 Felzenszwalb 欧氏距离变换；多组合层叠加取 max 后，求**全局 `rMax`** 并归一化 `r/rMax` 写入 R 通道（**恢复公式：`r = R * rMax`**，R 为归一化值 [0,1]）。
-4. **随机游走** `GenerateRoads`：每个组合层独立生成路网——候选点必须在起点同组合层（跨组跳过）；按 R 加权选点；**防卷曲**（锚点与新点距离 > `gApplySpacing` 才批量回填 G 胶囊，半径 = 沿途所在层 `roadSpacingMin`）；闭环合并（末点附近历史点接入网络）；结束对路径所有边统一填 B 胶囊（半径 = 所在层 `roadWidth`）。G = 占用/间隔缓冲（防绕圈 + 密度控制），B = 路面硬掩码。
-5. **合成** `ComposeRgb`：一张 RGB 图（R=距离场红，G=占用绿，B=路面蓝），结果存 `result_RGB.png`。
-6. **高度图烘焙** `BakeHeightMap`：逐像素按所在层 `heightRange`，用 Perlin 噪声（`heightSeed` + `heightScale` 频率）在范围内插值生成高度数组 → 统计实际 min/max 写入 `heightMin`/`heightMax` → 归一化 `(h-min)/(max-min)` 写入高度图 R 通道（**恢复公式：`h = R*(max-min)+min`**），结果存 `heightMap.png`。
-
-参数语义与默认值见设计文档；EDT 算法已独立验证。
-
-## LayerMap（绘制核心类）
-
-CPU 可读写 RGBA32 图片：`FillCircle`（圆形画笔）、`DrawLine`（拖拽直线条带）、`FillRect`（矩形填充）、`FillTriangle`（三角填充）；完全覆盖 alpha=1 不模糊；撤销快照 32 步；`SavePng`/`LoadPng`/`Resize`。不依赖 UnityEditor，供窗口与后续复用。
-
-## ModelFeatures.md
-
-模型特征记录：常用预制体的**类型 / 尺寸 / 外形 / 放置规则**，供 AI 地形搭建摆放时参考。尺寸统一用 bridge `mesh-bounds --placed` 视觉尺寸（x宽 × y高 × z深）。已覆盖 Bonfires / Crystals / Props / Timber / Tower / Tree / Vines / Grass / Rock / Stone&Cliff / Wall。
+1. 树木/细节产出形态：密度图 + 种子（推荐） vs 烘焙实例列表。
+2. 摆件编辑是否独立第七个子界面（推荐是）。
+3. alphamap 构建时噪声的参数：seed 策略 / noiseScale / blendSoft / 是否用距离场过渡。
+4. 主配置是否导出 JSON（跨工具/存档）——暂定不做，SO 为主。
+5. TerrainBuilder 双模式确认（编辑器烘焙为主、运行时构建为辅）。
