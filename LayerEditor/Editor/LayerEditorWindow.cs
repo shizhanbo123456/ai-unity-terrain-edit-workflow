@@ -504,12 +504,16 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.Info);
         }
 
-        /// <summary>高度编辑 · 全局配置：噪声 seed / scale + 烘焙结果（min/max/高度图）。</summary>
+        /// <summary>高度编辑 · 全局配置：噪声 seed / scale + 平滑参数 + 烘焙结果（min/max/高度图）。</summary>
         private void DrawHeightGlobalConfig()
         {
             EditorGUILayout.LabelField("高度编辑 · 全局配置", EditorStyles.boldLabel);
             _project.heightSeed = EditorGUILayout.IntField("高度 Seed", _project.heightSeed);
             _project.heightScale = Mathf.Max(0.001f, EditorGUILayout.FloatField("高度 Scale（噪声频率）", _project.heightScale));
+
+            _project.smoothStep = Mathf.Max(1, EditorGUILayout.IntField("平滑步长（像素）", _project.smoothStep));
+            _project.smoothIterations = Mathf.Max(0, EditorGUILayout.IntField("平滑迭代", _project.smoothIterations));
+            EditorGUILayout.HelpBox("平滑参数（十字线均值滤波）暂未参与烘焙运算，仅记录配置，后续接入。", MessageType.Info);
 
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
