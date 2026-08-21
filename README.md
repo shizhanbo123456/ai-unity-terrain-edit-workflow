@@ -42,8 +42,8 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
 | 4 摆件编辑 | layerMap + ObjectGroup | —（功能暂留空，后续设计） | — | **[暂留空]** |
-| 5 树木编辑 | layerMap + 树池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[待开发]**（子界面为占位） |
-| 6 细节编辑 | layerMap + 细节池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[待开发]**（子界面为占位） |
+| 5 树木编辑 | layerMap + 树池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[进行中]**（配置编辑可用；生成在 M3） |
+| 6 细节编辑 | layerMap + 细节池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[进行中]**（配置编辑可用；生成在 M3） |
 | 7 构建 | 主配置（SO + 全部 MapData） | `TerrainBuilder.Build()`（构建函数单一入口） | 真实 TerrainData + 摆件 GameObject | **[待开发]**（alphamap 算法 **[待设计]**） |
 | 8 运行时 | 主配置（TextAsset → float[][]） | 按需调用 Build()（时机由实际项目定） | 运行时地形 | **[待设计]** |
 
@@ -73,6 +73,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - 逐像素按所在层的 `heightRange`，用 Perlin 噪声（`heightSeed` + `heightScale` 频率）插值生成**真实高度**。
 - 真实高度直接写入 `MapData/height.txt`（float[][]，**不归一化**）；**范围不持久化**，由显示 / 构建时遍历数据现算（`ToTexture` 统计后以 `out` 传出）。
 - 预览图由窗口用 `MapDataTextureUtils.ToTexture` 生成，**不落盘**。
+- 平滑参数（`smoothStep` 步长 / `smoothIterations` 迭代，十字线均值滤波）已加入配置与窗口，**暂未参与运算**，后续接入 `BakeHeightData`。
 
 ### 阶段 3 · 贴图编辑 [已完成]
 
@@ -122,7 +123,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 ### 阶段 8 · 运行时 [待设计]
 
 - 运行时只读 float[][]（主配置 `mapDataFiles` 持 TextAsset 引用，随构建打包）；图片永不参与运行时。
-- 形态 **[待设计]**：TerrainBuilder 暴露 `Build()`，具体在 Awake / 场景加载 / 手动调用，由实际项目按需接入。
+- 形态 **[待设计]**：TerrainBuilder 暴露 `Build()`，具体在 Awake / 场景加载 / 手动调用，由实际项目按需接入；树木/细节由 **`SetCameraPosition(Vector2)`** 按观察点流式生成 / 回收（区块管理器驱动，见阶段 5/6）。
 
 ## MapData 存储层 [已完成]
 
@@ -138,7 +139,8 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 ```
 Utils/
 ├── UniformPointGenerator.cs    [已完成] 均匀分布随机点（网格抖动 Jittered Grid，确定性种子可复现）
-└── ObjectGroup.cs              [已完成] 摆件组 SO（groupName + GameObject 列表，供摆件编辑复用）
+├── ObjectGroup.cs              [已完成] 摆件组 SO（groupName + GameObject 列表，供摆件编辑复用）
+└── ChunkUpdateManager.cs       [已完成] 区块更新管理器（激活/失活区块集合，MoveTo 驱动；供 TerrainBuilder 树木/细节流式生成）
 
 LayerEditor/
 ├── CsvArrayCodec.cs            [已完成] MapData CSV 手写编解码（元数据头 / F3 / ToJagged / ToFlat）
@@ -164,7 +166,7 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 
 - `Tools / Terrain Edit Workflow / Log Version`：打印版本号。
 - `Tools / Terrain Edit Workflow / Open Terrain Paint Workflow`：打开工作流窗口。
-- 窗口六个子界面：工作流配置（含栅格分辨率） / 区域编辑 / 高度编辑 / 贴图编辑 / 摆件编辑 **[暂留空]** / 树木编辑 **[占位]** / 细节编辑 **[占位]**。
+- 窗口六个子界面：工作流配置（含栅格分辨率） / 区域编辑 / 高度编辑 / 贴图编辑 / 摆件编辑 **[暂留空]** / 树木编辑 **[进行中]**（生成配置编辑可用）/ 细节编辑 **[进行中]**（生成配置编辑可用）。
 
 ## 与 unity-python-bridge 的关系 [按需]
 
@@ -176,7 +178,7 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 ## 实施里程碑
 
 - **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
-- **M2 [待开发]** 树木 / 细节子界面（每层密度/scale/离路限制配置；位置**构建时按区块动态生成**，road&lt;0.5 + offRoad≥对应 limit 过滤）。
+- **M2 [已完成]** 树木 / 细节子界面配置编辑（每层密度/scale/离路限制/权重）；位置**构建时按区块动态生成**已并入 M3（TerrainBuilder 对象池生成，road&lt;0.5 + offRoad≥对应 limit 过滤）。
 - **M3 [待开发]** TerrainBuilder 组件（`Build()` 单一构建函数 + **树木/细节区块化对象池生成（SetCameraPosition 驱动）** + 构建时 alphamap 噪声生成）。
 - **M4 [暂留空]** 摆件编辑（位于树木之前，后续设计）。
 - **M5 [待设计]** bridge 可选集成（一键构建命令）。
