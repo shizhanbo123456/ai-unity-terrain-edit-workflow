@@ -117,7 +117,7 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        [MenuItem("Tools/Terrain Edit Workflow/Open Terrain Paint Workflow")]
+        // 菜单入口统一在 Editor/TerrainEditWorkflowMenu.cs（此处仅保留 Open 供其调用，避免同名菜单项重复注册）
         public static void Open()
         {
             GetWindow<LayerEditorWindow>("Terrain Paint Workflow");
