@@ -21,7 +21,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 |---|---|
 | 工作流项目 | `TerrainGeneratorConfigs` 目录下的一个文件夹；一个文件夹 = 一套完整的地形工作流配置（含主配置 SO + 各层级 SO + MapData）。 |
 | 主配置 | `TerrainPaintProjectSO`（ScriptableObject）：地形工作流的总配置，聚合素材池 / 规则 / 邻接组 / mapResolution / MapData 接口，是编辑器窗口与 `TerrainBuilder` 的单一数据入口。 |
-| 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的配置（颜色 / 名称 / 权重 / 高度范围 / 道路参数 / 最小离路距离，以及后续的树 / 细节位置列表）；数量 2~16，从属于主配置。 |
+| 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的配置（颜色 / 名称 / 权重 / 高度范围 / 道路参数 / 最小离路距离 / 构建时参数：密度、scale）；数量 2~16，从属于主配置。 |
 
 ## 注意 · 距离语义
 
@@ -42,8 +42,8 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
 | 4 摆件编辑 | layerMap + ObjectGroup | —（功能暂留空，后续设计） | — | **[暂留空]** |
-| 5 树木编辑 | layerMap + 树池 + 每层密度/scale/离路限制 | 按密度生成位置，**road&lt;0.5 + offRoad≥treeRoadDistanceLimit 过滤** | 每层 `treePositions`（Vector2[]）+ 密度/scale（层 Config） | **[待开发]**（子界面为占位） |
-| 6 细节编辑 | layerMap + 细节池 + 每层密度/scale/离路限制 | 按密度生成位置，**road&lt;0.5 + offRoad≥detailRoadDistanceLimit 过滤** | 每层 `detailPositions`（Vector2[]）+ 密度/scale（层 Config） | **[待开发]**（子界面为占位） |
+| 5 树木编辑 | layerMap + 树池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[待开发]**（子界面为占位） |
+| 6 细节编辑 | layerMap + 细节池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[待开发]**（子界面为占位） |
 | 7 构建 | 主配置（SO + 全部 MapData） | `TerrainBuilder.Build()`（构建函数单一入口） | 真实 TerrainData + 摆件 GameObject | **[待开发]**（alphamap 算法 **[待设计]**） |
 | 8 运行时 | 主配置（TextAsset → float[][]） | 按需调用 Build()（时机由实际项目定） | 运行时地形 | **[待设计]** |
 
@@ -86,20 +86,19 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ### 阶段 5 · 树木编辑 [待开发]（当前子界面为占位）
 
-- 每层配置新增字段：
+- 每层配置新增字段（均为**构建时参数**，位置本身不存储）：
   - `treeDensity`（float，个/平方米）
   - `treeScale`（Vector2，随机缩放范围 min~max）
   - `treeRoadDistanceLimit`（float，**米**，默认 3；距最近道路（offRoad）小于该值不生成树木，0 = 不限制）
-  - `treePositions`（Vector2[]，归一化位置列表，烘焙产物，**存于该层 LayerConfigSO**）
-- 烘焙流程：按该层掩码 + 密度生成均匀位置（复用 `UniformPointGenerator`，全局 seed 可复现）→ **过滤 `road >= 0.5`（不能生成在路上）且 `offRoad < treeRoadDistanceLimit`（不能离路太近；limit=0 时不限制）的位置** → 写入 `layer.treePositions`。
-- **构建时**（TerrainBuilder.ApplyTrees）：遍历 `treePositions`，用**全局 `TreeSeed`** + 该层 `treeWeights`（树池权重）随机决定每个位置放树池中的哪个原型；scale 在 `treeScale` 范围内随机。
+- **位置不烘焙、不落盘**（LayerConfigSO / MapData 均不存位置列表）。
+- **构建时按区块动态生成**（TerrainBuilder.ApplyTrees）：对每个区块，按该区块内各层掩码 + `treeDensity` 生成均匀位置（复用 `UniformPointGenerator` 思路，全局 `TreeSeed` 可复现）→ 过滤 `road >= 0.5`（不能生成在路上）且 `offRoad < treeRoadDistanceLimit`（不能离路太近；limit=0 时不限制）→ 用**全局 `TreeSeed`** + 该层 `treeWeights` 随机决定原型、scale 在 `treeScale` 内随机 → SetTreeInstances。**任何时刻只持有当前区块的位置，禁止一次性生成 / 加载全图位置列表**（对接区块管理器）。
 
 ### 阶段 6 · 细节编辑 [待开发]（当前子界面为占位）
 
-- 与树木编辑同构：每层 `detailDensity`（个/平方米）/ `detailScale`（Vector2）/ `detailRoadDistanceLimit`（float，**米**，默认 1，小于树的 treeRoadDistanceLimit；距最近道路小于该值不生成细节，0 = 不限制）/ `detailPositions`（Vector2[]，过滤条件同树木：road&lt;0.5 且 offRoad≥detailRoadDistanceLimit）。
-- **构建时**：用**全局 `DetailSeed`** + 该层 `detailWeights`（细节池权重）随机选原型。
+- 与树木编辑同构：每层 `detailDensity`（个/平方米）/ `detailScale`（Vector2）/ `detailRoadDistanceLimit`（float，**米**，默认 1，小于树的 treeRoadDistanceLimit；距最近道路小于该值不生成细节，0 = 不限制）。
+- **位置同样不存储、构建时按区块动态生成**（TerrainBuilder.ApplyDetail）：按区块掩码 + `detailDensity` 生成位置 → 过滤 `road >= 0.5` 且 `offRoad < detailRoadDistanceLimit`（limit=0 时不限制）→ 用**全局 `DetailSeed`** + 该层 `detailWeights` 随机选原型 → SetDetailLayer；**任何时刻只持有当前区块的位置**。
 
-> 注：**所有 seed 均为全局 seed（无每层 seed）**。位置列表存于各层 Config（非 MapData 栅格），密度/scale 不落 MapData。
+> 注：**所有 seed 均为全局 seed（无每层 seed）**。树木/细节位置**不存储**（构建时按区块动态生成）；密度/scale/离路限制/权重存各层 Config，不落 MapData。
 
 ### 阶段 7 · TerrainBuilder 构建 [待开发]（alphamap 算法待设计）
 
@@ -109,8 +108,8 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 1 PrepareTerrain  尺寸/分辨率/材质（terrainSpec）
 2 ApplyHeight     遍历 height 现算 min/max → 归一化 [0,1] → SetHeights
 3 ApplyAlphamap   ⭐构建时生成权重（见下）
-4 ApplyDetail     按各层 detailPositions + DetailSeed/权重 → SetDetailLayer
-5 ApplyTrees       按各层 treePositions + TreeSeed/权重 → SetTreeInstances
+4 ApplyDetail     按区块动态生成位置（密度/seed/过滤）→ SetDetailLayer
+5 ApplyTrees       按区块动态生成位置（密度/seed/过滤）→ SetTreeInstances
 6 PlaceProps       按摆件数据（摆件编辑后续设计）→ 实例化 GameObject
 7 PostProcess      碰撞、静态标记、光照贴图参数
 ```
@@ -130,7 +129,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - 格式：CSV，手写解析（无第三方库）。首行元数据头 `#key=...;w=...;h=...`（解析器跳过 `#` 行）；数值 **F3 三位小数**、InvariantCulture（跨平台一致）。
 - 引用：主配置持 `mapDataFiles`（`key + TextAsset`），随 SO 打进构建；**编辑器读直接读磁盘文件（保最新）**，**运行时走 TextAsset**。
 - 辅助：`MapDataTextureUtils`（float[][]↔Texture2D，仅编辑期显示/采集）。
-- key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。树木/细节的位置列表**不存 MapData**（存于各层 Config，见阶段 5/6）。
+- key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。树木/细节位置**不存储**（构建时按区块动态生成，见阶段 5/6）。
 
 ## 目录结构
 
@@ -144,7 +143,7 @@ LayerEditor/
 ├── MapDataStore.cs             [已完成] MapData/{key}.txt 文件 IO（写/读/删/存在性）
 ├── LayerMap.cs                 [已完成] 层图绘制核心（画布 ↔ 层ID float[][]，撤销/填充/线条）
 ├── LayerPalette.cs             [已完成] 15 预设色（Layer0 恒透明）
-├── LayerConfigSO.cs            [已完成] 每层配置（颜色/名称/权重/高度范围/道路参数/最小离路距离；树/细节位置列表字段 **[待开发]**）
+├── LayerConfigSO.cs            [已完成] 每层配置（颜色/名称/权重/高度范围/道路参数/最小离路距离/构建时参数；树/细节位置不存储）
 ├── TerrainPaintProjectSO.cs    [已完成] 主配置（素材池/规则/邻接组/mapResolution/mapDataFiles + MapData 接口）
 ├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
 ├── TerrainBuilder.cs           [暂留空] 构建组件（阶段 7，待开发）
@@ -175,14 +174,14 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 ## 实施里程碑
 
 - **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
-- **M2 [待开发]** 树木 / 细节子界面（每层密度/scale/位置列表烘焙，road&lt;0.5 + offRoad≥treeRoadDistanceLimit / detailRoadDistanceLimit 过滤）。
+- **M2 [待开发]** 树木 / 细节子界面（每层密度/scale/离路限制配置；位置**构建时按区块动态生成**，road&lt;0.5 + offRoad≥对应 limit 过滤）。
 - **M3 [待开发]** TerrainBuilder 组件（`Build()` 单一构建函数 + 构建时 alphamap 噪声生成）。
 - **M4 [暂留空]** 摆件编辑（位于树木之前，后续设计）。
 - **M5 [待设计]** bridge 可选集成（一键构建命令）。
 
 ## 待拍板事项（已收敛）
 
-1. ~~树木/细节产出形态~~ → **已定**：每层 Vector2 位置列表 + 密度(个/㎡) + scale(Vector2)；road&lt;0.5 过滤；构建时按全局 seed + 层权重选原型。
+1. ~~树木/细节产出形态~~ → **已定**：每层存构建时参数（密度(个/㎡) + scale(Vector2) + 离路限制）；**位置不存储，构建时按区块动态生成**（禁止全图位置列表驻留，对接区块管理器）；road&lt;0.5 + offRoad≥limit 过滤；构建时按全局 seed + 层权重选原型。
 2. ~~摆件编辑~~ → **已定**：位于树木编辑之前，功能暂留空，后续设计。
 3. alphamap 构建时噪声参数（noiseScale / blendSoft / 是否用距离场过渡）——构建时再定。
 4. ~~导出 JSON~~ → **已定**：不导出。
