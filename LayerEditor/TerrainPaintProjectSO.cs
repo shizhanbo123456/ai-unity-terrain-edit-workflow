@@ -46,7 +46,7 @@ namespace AiTerrainWorkflow.LayerEditor
     ///
     /// 字段按四个子界面用 Header 划分专属配置：
     ///   - 区域编辑：层次图（layerMap，绘画画布）
-    ///   - 高度编辑：heightSeed / heightScale / heightMin / heightMax / heightMap
+    ///   - 高度编辑：heightSeed / heightScale / smoothStep / smoothIterations / heightMin / heightMax / heightMap
     ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
     ///   - 树木编辑 / 细节编辑：Prefab 池（treePrefabs / detailPrefabs）
     /// </summary>
@@ -94,6 +94,26 @@ namespace AiTerrainWorkflow.LayerEditor
         public int heightSeed = 0;
         [Tooltip("烘焙高度图用的噪声空间频率（越大噪声变化越快）")]
         public float heightScale = 1f;
+
+        /// <summary>
+        /// 高度图平滑步长（像素）：十字线均值滤波的采样间距。
+        /// 生成高度图后，对其中每一个点 (x,y)：
+        /// 取 (x,y)、(x+k*step,y)、(x-k*step,y)、(x,y+k*step)、(x,y-k*step)，
+        /// 其中 k 为 &gt;0 且 &lt;= 平滑迭代的取值，共 1+4*平滑迭代 个点；
+        /// 去除超出边界的点后，采样剩余点的高度并取平均值，作为 (x,y) 的最终高度。
+        /// 暂未参与代码运算，仅记录参数语义。
+        /// </summary>
+        [Tooltip("高度图平滑步长（像素）：十字线均值滤波的采样间距（暂未参与运算）")]
+        public int smoothStep = 1;
+
+        /// <summary>
+        /// 高度图平滑迭代次数：决定十字线均值滤波的采样半径（k 取 1..平滑迭代）。
+        /// 采样点数为 1+4*平滑迭代；为 0 时仅取中心点自身，即不平滑。
+        /// 暂未参与代码运算，仅记录参数语义。
+        /// </summary>
+        [Tooltip("高度图平滑迭代：十字线均值滤波采样半径，采样点数=1+4*迭代（暂未参与运算）")]
+        public int smoothIterations = 0;
+
         [HideInInspector, Tooltip("烘焙高度图时自动写入的实际高度最小/最大值")]
         public float heightMin;
         [HideInInspector, Tooltip("烘焙高度图时自动写入的实际高度最小/最大值")]
