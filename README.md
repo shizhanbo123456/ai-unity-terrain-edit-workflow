@@ -22,6 +22,8 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 工作流项目 | `TerrainGeneratorConfigs` 目录下的一个文件夹；一个文件夹 = 一套完整的地形工作流配置（含主配置 SO + 各层级 SO + MapData）。 |
 | 主配置 | `TerrainPaintProjectSO`（ScriptableObject）：地形工作流的总配置，聚合素材池 / 规则 / 邻接组 / mapResolution / MapData 接口，是编辑器窗口与 `TerrainBuilder` 的单一数据入口。 |
 | 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的配置（颜色 / 名称 / 权重 / 高度范围 / 道路参数 / 最小离路距离 / 构建时参数：密度、scale）；数量 2~16，从属于主配置。 |
+| 生成组 | `GenerationGroup`：主配置中的一组摆件生成规则（生成尝试次数 / 高度变化限制 / 物体成员与权重及数量上下限 / 朝向 / 排列依据-距离场 / 排列位置-值域 / 排列方式），对应一类物件的摆放规则（见阶段 4）。 |
+| 物体库 | 统一存放所有可用场景物体的文件夹；每个物体一个**单物体预制体**（根节点零变换）+ `PropInfo` 信息组件（尺寸/类别/朝向约束等）。 |
 
 ## 注意 · 距离语义
 
@@ -32,16 +34,16 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 ## 完整工作流
 
 ```
-素材准备 → ①区域编辑 → ②高度 → ③贴图 → ④摆件(暂留空) → ⑤树木 → ⑥细节 → ⑦TerrainBuilder 构建 → ⑧运行时/交付
+素材准备 → ①区域编辑 → ②高度 → ③贴图 → ④摆件 → ⑤树木 → ⑥细节 → ⑦TerrainBuilder 构建 → ⑧运行时/交付
 ```
 
 | 阶段 | 输入 | 处理 | 产出（载体） | 状态 |
 |---|---|---|---|---|
-| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 建素材池；bridge 量尺寸/截预览 | 素材池 + ModelFeatures | 池 **[已完成]**；摆件池/测量回流 **[待设计]** |
+| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 建素材池 + 物体库（单物体零变换 prefab + PropInfo）；bridge 量尺寸/截预览 | 素材池 + 物体库 + ModelFeatures | 池 **[已完成]**；物体库规范 **[已定]**；生成组/测量回流 **[待开发/待设计]** |
 | 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
-| 4 摆件编辑 | layerMap + ObjectGroup | —（功能暂留空，后续设计） | — | **[暂留空]** |
+| 4 摆件编辑 | 物体库 prefab + 生成组配置 | 生成组规则化摆放（试位/高度变化限制/距离场值域过滤） | 生成组配置（主配置）+ 物体库 | **[设计已定，待开发]** |
 | 5 树木编辑 | layerMap + 树池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[进行中]**（配置编辑可用；生成在 M3） |
 | 6 细节编辑 | layerMap + 细节池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置** | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[进行中]**（配置编辑可用；生成在 M3） |
 | 7 构建 | 主配置（SO + 全部 MapData） | `TerrainBuilder.Build()`（构建函数单一入口） | 真实 TerrainData + 摆件 GameObject | **[待开发]**（alphamap 算法 **[待设计]**） |
@@ -49,10 +51,14 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ## 阶段详述
 
-### 阶段 0 · 素材准备 [池：已完成；摆件池/测量回流：待设计]
+### 阶段 0 · 素材准备 [池：已完成；物体库规范：已定；生成组/测量回流：待开发/待设计]
 
 - 已有素材池（全局，写入主配置）：`naturalTerrainLayers`（自然 TerrainLayer）、`roadTerrainLayers`（道路 TerrainLayer）、`treePrefabs`（树）、`detailPrefabs`（细节）。
-- **[待开发]** 摆件池：复用 `ObjectGroup`（groupName + GameObject 列表）。
+- **物体库规范 [已定，2026-08-22]**（供阶段 4 摆件编辑使用）：
+  - 所有可用场景物体集中存放于 ai 工作流项目内**一个统一文件夹**；
+  - 每个物体一个预制体，**只含该物体**；根节点 **transform / rotation 均为默认值**（位置 0、旋转默认、缩放 1）——放置时直接操作根节点，无需任何换算；
+  - 每个预制体挂载一个**信息组件 `PropInfo`**：描述尺寸（Renderer.bounds 自动采集）、类别、朝向约束等，供生成逻辑与代码阅读统一识别。
+- **[待开发]** 生成组（GenerationGroup）与摆件池：复用 `ObjectGroup`（groupName + GameObject 列表）与 `UniformPointGenerator`。
 - **[待设计]** bridge 按需测量：`mesh.bounds --placed` 量取素材尺寸写回 `ModelFeatures.md`；`prefab.screenshot` 生成缩略图供窗口显示。
 
 ### 阶段 1 · 区域编辑 [已完成]
@@ -76,9 +82,29 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - 结果写入四个 MapData key：`distance`（R，**像素距离真实值**）/ `occupancy`（G）/ `road`（B）/ `offRoad`（**米**：语义层区域（不含 Layer0）内到最近道路的距离，道路处=0、区域外=0）。**范围不持久化**：预览 RGB 图的 R 通道由数据现算 max 归一化，构建时同样现算。
 - **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。
 
-### 阶段 4 · 摆件编辑 [暂留空]
+### 阶段 4 · 摆件编辑 [设计已定，待开发]（2026-08-22 定稿）
 
-- 位于树木编辑之前；**功能暂留空，后续设计**。规划时复用 `ObjectGroup`（groupName + GameObject 列表）与 `UniformPointGenerator`。
+- 位于树木编辑之前。生成时配置**多个生成组**（`GenerationGroup`，写入主配置 `TerrainPaintProjectSO`），每组独立描述一类物件的摆放规则；执行挂接 `TerrainBuilder.PlaceProps`（阶段 7 步骤 6）。
+
+**物体资源规范**（与阶段 0 一致）：
+- 所有可用场景物体集中在统一文件夹；每个物体一个 prefab、只含该物体，根节点 transform/rotation 为默认值（零变换）。
+- 每个 prefab 挂载 `PropInfo` 信息组件：尺寸 / 类别 / 朝向约束等。
+
+**生成组（GenerationGroup）参数**：
+
+| 参数 | 语义 |
+|---|---|
+| 生成尝试次数 | 区域内随机试位次数上限；每次尝试 = 采样一个候选位置，通过全部检查才放置 |
+| 高度变化限制 | 候选位置高度相对基准（如地形面）变化超过该值 → 放弃该点（陡坡/落差大处不摆） |
+| 物体成员 | 组内可选物体列表 + 各自**生成权重** + **数量上下限**（min / max） |
+| 朝向（enum） | 摆放朝向策略：只绕 y / 任意旋转 / 沿排列方向 / 朝向道路等（复用 ModelFeatures 的 yaw 约束分类） |
+| 排列依据（enum） | 选择哪个距离场作为排列依据：`distance` / `offRoad` / `height` 等（复用现有 MapData key） |
+| 排列位置（Vector2） | 生成位置在所选距离场中的**值域范围 [min, max]**（如 offRoad ∈ [2, 5] 米 = 距路边 2~5m 的带） |
+| 排列方式（enum） | 沿距离场的**增减方向**（梯度方向，垂直等值线）或**近似不变方向**（沿等值线）分布 / 延伸 |
+
+**生成流程（草案）**：选区域（语义层 / 全图 / 手绘范围，待定）→ 随机试位（≤ 尝试次数）→ 高度变化检查 → 距离场值域检查（排列依据 + 排列位置）→ 按排列方式确定偏移 / 朝向 → 按权重选型、数量在上下限内 → 实例化。
+
+**与现有一致性**：seed 全局可复现；高度 = `Terrain.SampleHeight`；位置过滤复用 `layerMap` / `offRoad` / `road` / `height` MapData；实例化复用对象池（小摆件可挂 `ChunkUpdateManager` 流式；大摆件建议构建期一次性实例化，避免墙段等切块断接）。
 
 ### 阶段 5 · 树木编辑 [进行中]（配置编辑已可用；位置由构建端动态生成）
 
@@ -110,7 +136,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 3 ApplyAlphamap   ⭐构建时生成权重（见下）
 4 ApplyDetail     按区块动态生成位置（密度/seed/过滤）→ 对象池实例化
 5 ApplyTrees       按区块动态生成位置（密度/seed/过滤）→ 对象池实例化
-6 PlaceProps       按摆件数据（摆件编辑后续设计）→ 实例化 GameObject
+6 PlaceProps       按生成组配置（GenerationGroup，见阶段 4）→ 实例化 GameObject
 7 PostProcess      碰撞、静态标记、光照贴图参数
 ```
 
@@ -177,13 +203,13 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 - **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
 - **M2 [已完成]** 树木 / 细节子界面配置编辑（每层密度/scale/离路限制/权重）；位置**构建时按区块动态生成**已并入 M3（TerrainBuilder 对象池生成，road&lt;0.5 + offRoad≥对应 limit 过滤）。
 - **M3 [待开发]** TerrainBuilder 组件（`Build()` 单一构建函数 + **树木/细节区块化对象池生成（SetCameraPosition 驱动）** + 构建时 alphamap 噪声生成）。
-- **M4 [暂留空]** 摆件编辑（位于树木之前，后续设计）。
+- **M4 [设计已定，待开发]** 摆件编辑（生成组规则化摆放 + 物体库；位于树木之前）。
 - **M5 [待设计]** bridge 可选集成（一键构建命令）。
 
 ## 待拍板事项（已收敛）
 
 1. ~~树木/细节产出形态~~ → **已定**：每层存构建时参数（密度(个/㎡) + scale(Vector2) + 离路限制）；**位置不存储，构建时按区块动态生成**（禁止全图位置列表驻留，对接区块管理器）；road&lt;0.5 + offRoad≥limit 过滤；构建时按全局 seed + 层权重选原型。
-2. ~~摆件编辑~~ → **已定**：位于树木编辑之前，功能暂留空，后续设计。
+2. ~~摆件编辑~~ → **已定（2026-08-22）**：统一物体库（单物体零变换 prefab + `PropInfo` 信息组件）+ 生成组 GenerationGroup（尝试次数 / 高度变化限制 / 成员权重与数量上下限 / 朝向 enum / 排列依据 enum-距离场 / 排列位置 Vector2-值域 / 排列方式 enum-增减或等值线方向）。详见阶段 4。
 3. alphamap 构建时噪声参数（noiseScale / blendSoft / 是否用距离场过渡）——构建时再定。
 4. ~~导出 JSON~~ → **已定**：不导出。
 5. ~~TerrainBuilder 双模式~~ → **已定**：只暴露 `Build()`，构建时机由实际项目按需调用。
