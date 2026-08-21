@@ -590,18 +590,30 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        /// <summary>树木编辑 · 全局配置：树木/植被 Prefab 池。</summary>
+        /// <summary>树木编辑 · 全局配置：种子 / 区块参数 / 树木 Prefab 池。</summary>
         private void DrawTreeGlobalConfig()
         {
             EditorGUILayout.LabelField("树木编辑 · 全局配置", EditorStyles.boldLabel);
+
+            _project.treeSeed = EditorGUILayout.IntField("树木 Seed（全局）", _project.treeSeed);
+            _project.treeChunkSize = EditorGUILayout.Vector2Field("区块尺寸（米，x/z）", _project.treeChunkSize);
+            _project.treeVisibleDistance = Mathf.Max(0f, EditorGUILayout.FloatField("可见距离（米）", _project.treeVisibleDistance));
+
+            EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("树木 Prefab 池", EditorStyles.boldLabel);
             DrawPrefabPool(_project.treePrefabs, "树木");
         }
 
-        /// <summary>细节编辑 · 全局配置：细节网格/草 Prefab 池。</summary>
+        /// <summary>细节编辑 · 全局配置：种子 / 区块参数 / 细节 Prefab 池。</summary>
         private void DrawDetailGlobalConfig()
         {
             EditorGUILayout.LabelField("细节编辑 · 全局配置", EditorStyles.boldLabel);
+
+            _project.detailSeed = EditorGUILayout.IntField("细节 Seed（全局）", _project.detailSeed);
+            _project.detailChunkSize = EditorGUILayout.Vector2Field("区块尺寸（米，x/z）", _project.detailChunkSize);
+            _project.detailVisibleDistance = Mathf.Max(0f, EditorGUILayout.FloatField("可见距离（米）", _project.detailVisibleDistance));
+
+            EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("细节 Prefab 池", EditorStyles.boldLabel);
             DrawPrefabPool(_project.detailPrefabs, "细节");
         }
@@ -686,7 +698,7 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorUtility.SetDirty(_project);
         }
 
-        /// <summary>树木编辑 · 单个层级的配置：树木生成权重列表。</summary>
+        /// <summary>树木编辑 · 单个层级的配置：密度/缩放/离路限制 + 树木生成权重列表。</summary>
         private void DrawTreeLayerConfig(int index, LayerConfigSO layer)
         {
             EditorGUILayout.BeginHorizontal();
@@ -704,13 +716,19 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
 
             EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("生成参数", EditorStyles.boldLabel);
+            layer.treeDensity = Mathf.Max(0f, EditorGUILayout.FloatField("密度（个/㎡）", layer.treeDensity));
+            layer.treeScale = EditorGUILayout.Vector2Field("随机缩放（min~max）", layer.treeScale);
+            layer.treeRoadDistanceLimit = Mathf.Max(0f, EditorGUILayout.FloatField("最小离路距离（米，0=不限）", layer.treeRoadDistanceLimit));
+
+            EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("树木生成权重（0 = 不生成；索引对应全局树池）", EditorStyles.boldLabel);
             DrawPrefabWeightList(layer.treeWeights, _project.treePrefabs, "树木");
             EditorGUILayout.EndVertical();
             EditorUtility.SetDirty(layer);
         }
 
-        /// <summary>细节编辑 · 单个层级的配置：细节生成权重列表。</summary>
+        /// <summary>细节编辑 · 单个层级的配置：密度/缩放/离路限制 + 细节生成权重列表。</summary>
         private void DrawDetailLayerConfig(int index, LayerConfigSO layer)
         {
             EditorGUILayout.BeginHorizontal();
@@ -728,6 +746,12 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
 
             EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.LabelField("生成参数", EditorStyles.boldLabel);
+            layer.detailDensity = Mathf.Max(0f, EditorGUILayout.FloatField("密度（个/㎡）", layer.detailDensity));
+            layer.detailScale = EditorGUILayout.Vector2Field("随机缩放（min~max）", layer.detailScale);
+            layer.detailRoadDistanceLimit = Mathf.Max(0f, EditorGUILayout.FloatField("最小离路距离（米，0=不限）", layer.detailRoadDistanceLimit));
+
+            EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("细节生成权重（0 = 不生成；索引对应全局细节池）", EditorStyles.boldLabel);
             DrawPrefabWeightList(layer.detailWeights, _project.detailPrefabs, "细节");
             EditorGUILayout.EndVertical();
@@ -1396,23 +1420,23 @@ namespace AiTerrainWorkflow.LayerEditor
                 rFlat, CsvArrayCodec.ToFlat(g), CsvArrayCodec.ToFlat(b), w, h);
         }
 
-        // ---------- ③ 树木编辑（占位） ----------
+        // ---------- ③ 树木编辑（信息生成 = 占位；配置编辑在左栏） ----------
 
         private void DrawTreeEditView()
         {
             EditorGUILayout.HelpBox(
-                "「树木编辑」子界面将在下一阶段实现：\n" +
-                "· 树木/植被放置与配置",
+                "树木生成配置（Seed / 区块 / Prefab 池 / 每层密度、缩放、离路限制、权重）在左栏编辑。\n" +
+                "位置**不在此生成**：构建时由 TerrainBuilder.SetCameraPosition 按区块动态生成（见 README 阶段 5/7）。",
                 MessageType.Info);
         }
 
-        // ---------- ④ 细节编辑（占位） ----------
+        // ---------- ④ 细节编辑（信息生成 = 占位；配置编辑在左栏） ----------
 
         private void DrawDetailEditView()
         {
             EditorGUILayout.HelpBox(
-                "「细节编辑」子界面将在下一阶段实现：\n" +
-                "· 细节网格/草放置与配置",
+                "细节生成配置（Seed / 区块 / Prefab 池 / 每层密度、缩放、离路限制、权重）在左栏编辑。\n" +
+                "位置**不在此生成**：构建时由 TerrainBuilder.SetCameraPosition 按区块动态生成（见 README 阶段 6/7）。",
                 MessageType.Info);
         }
 

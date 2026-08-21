@@ -84,7 +84,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 - 位于树木编辑之前；**功能暂留空，后续设计**。规划时复用 `ObjectGroup`（groupName + GameObject 列表）与 `UniformPointGenerator`。
 
-### 阶段 5 · 树木编辑 [待开发]（当前子界面为占位）
+### 阶段 5 · 树木编辑 [进行中]（配置编辑已可用；位置由构建端动态生成）
 
 - 每层配置新增字段（均为**构建时参数**，位置本身不存储）：
   - `treeDensity`（float，个/平方米）
@@ -93,7 +93,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - **位置不烘焙、不落盘**（LayerConfigSO / MapData 均不存位置列表）。
 - **构建时按区块动态生成**（TerrainBuilder 驱动）：主配置 `treeChunkSize`（区块尺寸）/ `treeVisibleDistance`（可见距离）决定区块划分与激活半径；`SetCameraPosition(Vector2)` 时，区块中心进入可见距离的区块，按该区块内各层掩码 + `treeDensity` 均匀采样位置（区块 seed = 全局 `TreeSeed` ⊕ 区块 index，可复现）→ 过滤 `road >= 0.5`（不能生成在路上）且 `offRoad < treeRoadDistanceLimit`（不能离路太近；limit=0 时不限制）→ 按该层 `treeWeights` 权重随机选原型、scale 在 `treeScale` 内随机 → 从**对象池**实例化 GameObject（name=池 key、`HideInHierarchy` 隐藏；高度 = Terrain.SampleHeight）。区块离开可见距离则整区块物体回收进对象池。**任何时刻只持有当前区块的物体，禁止一次性生成 / 加载全图位置列表**（对接区块管理器）。
 
-### 阶段 6 · 细节编辑 [待开发]（当前子界面为占位）
+### 阶段 6 · 细节编辑 [进行中]（配置编辑已可用；位置由构建端动态生成）
 
 - 与树木编辑同构：每层 `detailDensity`（个/平方米）/ `detailScale`（Vector2）/ `detailRoadDistanceLimit`（float，**米**，默认 1，小于树的 treeRoadDistanceLimit；距最近道路小于该值不生成细节，0 = 不限制）。
 - **位置同样不存储、构建时按区块动态生成**（TerrainBuilder 驱动，逻辑同树木）：主配置 `detailChunkSize` / `detailVisibleDistance`；`SetCameraPosition` 时按区块掩码 + `detailDensity` 生成位置 → 过滤 `road >= 0.5` 且 `offRoad < detailRoadDistanceLimit`（limit=0 时不限制）→ 按 `detailWeights` 权重随机选原型 → **对象池实例化**（高度 = Terrain.SampleHeight）；区块离开可见距离则整区块回收。**任何时刻只持有当前区块的物体**。
