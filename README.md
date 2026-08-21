@@ -91,12 +91,12 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
   - `treeScale`（Vector2，随机缩放范围 min~max）
   - `treeRoadDistanceLimit`（float，**米**，默认 3；距最近道路（offRoad）小于该值不生成树木，0 = 不限制）
 - **位置不烘焙、不落盘**（LayerConfigSO / MapData 均不存位置列表）。
-- **构建时按区块动态生成**（TerrainBuilder.ApplyTrees）：对每个区块，按该区块内各层掩码 + `treeDensity` 生成均匀位置（复用 `UniformPointGenerator` 思路，全局 `TreeSeed` 可复现）→ 过滤 `road >= 0.5`（不能生成在路上）且 `offRoad < treeRoadDistanceLimit`（不能离路太近；limit=0 时不限制）→ 用**全局 `TreeSeed`** + 该层 `treeWeights` 随机决定原型、scale 在 `treeScale` 内随机 → SetTreeInstances。**任何时刻只持有当前区块的位置，禁止一次性生成 / 加载全图位置列表**（对接区块管理器）。
+- **构建时按区块动态生成**（TerrainBuilder 驱动）：主配置 `treeChunkSize`（区块尺寸）/ `treeVisibleDistance`（可见距离）决定区块划分与激活半径；`SetCameraPosition(Vector2)` 时，区块中心进入可见距离的区块，按该区块内各层掩码 + `treeDensity` 均匀采样位置（区块 seed = 全局 `TreeSeed` ⊕ 区块 index，可复现）→ 过滤 `road >= 0.5`（不能生成在路上）且 `offRoad < treeRoadDistanceLimit`（不能离路太近；limit=0 时不限制）→ 按该层 `treeWeights` 权重随机选原型、scale 在 `treeScale` 内随机 → 从**对象池**实例化 GameObject（name=池 key、`HideInHierarchy` 隐藏；高度 = Terrain.SampleHeight）。区块离开可见距离则整区块物体回收进对象池。**任何时刻只持有当前区块的物体，禁止一次性生成 / 加载全图位置列表**（对接区块管理器）。
 
 ### 阶段 6 · 细节编辑 [待开发]（当前子界面为占位）
 
 - 与树木编辑同构：每层 `detailDensity`（个/平方米）/ `detailScale`（Vector2）/ `detailRoadDistanceLimit`（float，**米**，默认 1，小于树的 treeRoadDistanceLimit；距最近道路小于该值不生成细节，0 = 不限制）。
-- **位置同样不存储、构建时按区块动态生成**（TerrainBuilder.ApplyDetail）：按区块掩码 + `detailDensity` 生成位置 → 过滤 `road >= 0.5` 且 `offRoad < detailRoadDistanceLimit`（limit=0 时不限制）→ 用**全局 `DetailSeed`** + 该层 `detailWeights` 随机选原型 → SetDetailLayer；**任何时刻只持有当前区块的位置**。
+- **位置同样不存储、构建时按区块动态生成**（TerrainBuilder 驱动，逻辑同树木）：主配置 `detailChunkSize` / `detailVisibleDistance`；`SetCameraPosition` 时按区块掩码 + `detailDensity` 生成位置 → 过滤 `road >= 0.5` 且 `offRoad < detailRoadDistanceLimit`（limit=0 时不限制）→ 按 `detailWeights` 权重随机选原型 → **对象池实例化**（高度 = Terrain.SampleHeight）；区块离开可见距离则整区块回收。**任何时刻只持有当前区块的物体**。
 
 > 注：**所有 seed 均为全局 seed（无每层 seed）**。树木/细节位置**不存储**（构建时按区块动态生成）；密度/scale/离路限制/权重存各层 Config，不落 MapData。
 
@@ -104,12 +104,14 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 规划步骤（对外**只暴露一个构建函数 `Build()`**，构建时机由实际项目按需调用，不内置双模式）：
 
+> 树木 / 细节**不在此一次性构建**：`Build()` 只初始化区块管理器（`ChunkUpdateManager`）与对象池，之后由 **`SetCameraPosition(Vector2)`** 按观察点流式生成 / 回收（见阶段 5/6）。
+
 ```
 1 PrepareTerrain  尺寸/分辨率/材质（terrainSpec）
 2 ApplyHeight     遍历 height 现算 min/max → 归一化 [0,1] → SetHeights
 3 ApplyAlphamap   ⭐构建时生成权重（见下）
-4 ApplyDetail     按区块动态生成位置（密度/seed/过滤）→ SetDetailLayer
-5 ApplyTrees       按区块动态生成位置（密度/seed/过滤）→ SetTreeInstances
+4 ApplyDetail     按区块动态生成位置（密度/seed/过滤）→ 对象池实例化
+5 ApplyTrees       按区块动态生成位置（密度/seed/过滤）→ 对象池实例化
 6 PlaceProps       按摆件数据（摆件编辑后续设计）→ 实例化 GameObject
 7 PostProcess      碰撞、静态标记、光照贴图参数
 ```
@@ -146,7 +148,7 @@ LayerEditor/
 ├── LayerConfigSO.cs            [已完成] 每层配置（颜色/名称/权重/高度范围/道路参数/最小离路距离/构建时参数；树/细节位置不存储）
 ├── TerrainPaintProjectSO.cs    [已完成] 主配置（素材池/规则/邻接组/mapResolution/mapDataFiles + MapData 接口）
 ├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
-├── TerrainBuilder.cs           [暂留空] 构建组件（阶段 7，待开发）
+├── TerrainBuilder.cs           [进行中] 构建组件（阶段 7：树木/细节区块化对象池生成已实现；高度/纹理/摆件待开发）
 └── Editor/
     ├── LayerEditorWindow.cs    [已完成] 工作流窗口（六子界面 + 创建向导尺寸单选 + MapData 接线）
     └── MapDataTextureUtils.cs  [已完成] float[][]↔Texture2D（仅显示/采集）
@@ -175,7 +177,7 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 
 - **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
 - **M2 [待开发]** 树木 / 细节子界面（每层密度/scale/离路限制配置；位置**构建时按区块动态生成**，road&lt;0.5 + offRoad≥对应 limit 过滤）。
-- **M3 [待开发]** TerrainBuilder 组件（`Build()` 单一构建函数 + 构建时 alphamap 噪声生成）。
+- **M3 [待开发]** TerrainBuilder 组件（`Build()` 单一构建函数 + **树木/细节区块化对象池生成（SetCameraPosition 驱动）** + 构建时 alphamap 噪声生成）。
 - **M4 [暂留空]** 摆件编辑（位于树木之前，后续设计）。
 - **M5 [待设计]** bridge 可选集成（一键构建命令）。
 
