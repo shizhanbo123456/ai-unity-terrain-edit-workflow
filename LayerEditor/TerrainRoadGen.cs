@@ -84,11 +84,11 @@ namespace AiTerrainWorkflow.LayerEditor
             return groups;
         }
 
-        // ---------- 距离场（二值欧氏距离变换 + maxD 归一化） ----------
+        // ---------- 距离场（二值欧氏距离变换） ----------
 
         /// <summary>
-        /// 计算组合层级的 R 通道：区域内像素到最近区域边界（组外像素）的欧氏距离，
-        /// 用全场最大距离 maxD 归一化到 [0,1]（边界=0，最深内陆=1）；区域外 R=0。
+        /// 计算组合层级的 R 通道：区域内像素到最近区域边界（组外像素）的欧氏距离（像素单位，**真实值不归一化**；
+        /// 边界=0，最深内陆=最大值）；区域外 R=0。maxD = 组内最大距离（真实值）。
         /// </summary>
         public static float[] ComputeR(int[] layerIds, int w, int h, List<int> group, out float maxD)
         {
@@ -132,12 +132,55 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
             }
 
-            if (maxD > 0.001f)
-            {
-                for (int i = 0; i < r.Length; i++)
-                    r[i] = Mathf.Clamp01(r[i] / maxD);
-            }
             return r;
+        }
+
+        /// <summary>
+        /// 计算 offRoad 距离场：语义层（层 ID ≥1，排除 -1 透明与 Layer0）拼合区域内，
+        /// 非道路像素到最近道路像素的欧氏距离（像素 → × worldPerPixel 转**米**）；道路像素=0，拼合区域外=0。
+        /// 树木生成时按所在层 roadDistanceLimit 过滤（offRoad &lt; limit 的位置不生成）。
+        /// </summary>
+        public static float[] ComputeOffRoad(int[] layerIds, float[] road, int w, int h, float worldPerPixel)
+        {
+            const float Big = 1e7f; // 前景（非道路）初始值，远大于任何像素距离平方
+            float m = worldPerPixel > 0f ? worldPerPixel : 1f;
+            var frow = new float[w];
+            var tmp = new float[w * h];
+
+            // 行 pass：道路=背景(0)，其余=前景(Big)
+            for (int y = 0; y < h; y++)
+            {
+                int baseIdx = y * w;
+                for (int x = 0; x < w; x++)
+                    frow[x] = road[baseIdx + x] > 0.5f ? 0f : Big;
+                var gx = Edt1D(frow);
+                for (int x = 0; x < w; x++)
+                    tmp[baseIdx + x] = gx[x];
+            }
+
+            // 列 pass + 语义层区域筛选 + 米换算
+            var fcol = new float[h];
+            var off = new float[w * h];
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = 0; y < h; y++)
+                    fcol[y] = tmp[y * w + x];
+                var gy = Edt1D(fcol);
+                for (int y = 0; y < h; y++)
+                {
+                    int idx = y * w + x;
+                    if (layerIds[idx] > 0) // 语义层（不包含 Layer0 / 透明 -1）
+                    {
+                        float d = Mathf.Sqrt(Mathf.Max(0f, gy[y]));
+                        off[idx] = d * m;
+                    }
+                    else
+                    {
+                        off[idx] = 0f;
+                    }
+                }
+            }
+            return off;
         }
 
         /// <summary>1D 平方距离变换（Felzenszwalb & Huttenlocher O(n)）。f[i]=0 为背景，大值代表前景。</summary>

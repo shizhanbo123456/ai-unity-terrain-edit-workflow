@@ -1352,10 +1352,12 @@ namespace AiTerrainWorkflow.LayerEditor
             for (int i = 0; i < rArr.Length; i++)
                 if (rArr[i] > _lastRMax) _lastRMax = rArr[i];
 
-            // 写 MapData：R/G/B 三个 key（不再落 PNG；图片仅作内存预览）
+            // 写 MapData：R/G/B + offRoad 四个 key（不再落 PNG；图片仅作内存预览）
             _project.WriteMap("distance", CsvArrayCodec.ToJagged(rArr, w, h));
             _project.WriteMap("occupancy", CsvArrayCodec.ToJagged(gArr, w, h));
             _project.WriteMap("road", CsvArrayCodec.ToJagged(bArr, w, h));
+            _project.WriteMap("offRoad", CsvArrayCodec.ToJagged(
+                TerrainRoadGen.ComputeOffRoad(ids, bArr, w, h, _project.config.worldPerPixel), w, h));
             _project.RefreshMapDataRefs(true);
             EditorUtility.SetDirty(_project);
 
@@ -1363,7 +1365,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 Object.DestroyImmediate(_resultPreview);
             _resultPreview = tex;
 
-            Debug.Log($"[Terrain Paint Workflow] 距离场/路网计算完成，已写入 MapData: distance/occupancy/road.txt" +
+            Debug.Log($"[Terrain Paint Workflow] 距离场/路网计算完成，已写入 MapData: distance/occupancy/road/offRoad.txt" +
                       $"（{_project.layers.Count} 层 / {TerrainRoadGen.GroupLayers(_project).Count} 个组合层）");
             Repaint();
         }
