@@ -79,6 +79,9 @@ namespace AiTerrainWorkflow.LayerEditor
         private Texture2D _resultPreview;
         private Texture2D _heightPreview;
         private int[] _layerIdsCache;
+        private float _lastHeightMin;
+        private float _lastHeightMax;
+        private float _lastRMax;
 
         private bool HasProject => _project != null;
 
@@ -510,8 +513,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField($"高度 Min: {_project.heightMin:F2}");
-            EditorGUILayout.LabelField($"高度 Max: {_project.heightMax:F2}");
+            EditorGUILayout.LabelField($"高度 Min: {_lastHeightMin:F2}");
+            EditorGUILayout.LabelField($"高度 Max: {_lastHeightMax:F2}");
             EditorGUILayout.HelpBox(
                 _project.HasMap("height")
                     ? "高度数据已烘焙（MapData/height.txt），预览在右侧信息生成栏。"
@@ -531,7 +534,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField($"R 通道 Max: {_project.rMax:F2}");
+            EditorGUILayout.LabelField($"R 通道 Max: {_lastRMax:F2}");
         }
 
         /// <summary>邻接组（组合层级分组）编辑器：List&lt;List&lt;int&gt;&gt;，同一层级不可跨组重复。</summary>
@@ -921,9 +924,8 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             EditorGUILayout.LabelField("高度图烘焙", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "逐像素按所在层级的高度范围，用 Perlin 噪声（seed + scale）在该范围内插值生成高度数组；\n" +
-                "实际 min/max 自动写入全局配置，数组归一化后写入高度图 R 通道。\n" +
-                "恢复公式：h = r * (max - min) + min（r 为 R 通道归一化值 [0,1]）。",
+                "逐像素按所在层级的高度范围，用 Perlin 噪声（seed + scale）在该范围内插值生成真实高度数组；\n" +
+                "直接写入 MapData/height.txt（不归一化）；显示/构建时遍历数据现算范围。",
                 MessageType.None);
 
             EditorGUILayout.BeginHorizontal();
@@ -935,8 +937,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (_heightPreview != null)
                     Object.DestroyImmediate(_heightPreview);
                 _heightPreview = null;
-                _project.heightMin = 0f;
-                _project.heightMax = 0f;
+                _lastHeightMin = 0f;
+                _lastHeightMax = 0f;
                 EditorUtility.SetDirty(_project);
             }
             EditorGUILayout.EndHorizontal();
@@ -948,7 +950,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 float previewH = previewW * (float)_heightPreview.height / Mathf.Max(1, _heightPreview.width);
                 GUILayout.Label(_heightPreview, GUILayout.Width(previewW), GUILayout.Height(previewH));
                 EditorGUILayout.LabelField(
-                    $"当前范围: [{_project.heightMin:F2}, {_project.heightMax:F2}]", EditorStyles.miniLabel);
+                    $"当前范围: [{_lastHeightMin:F2}, {_lastHeightMax:F2}]", EditorStyles.miniLabel);
             }
         }
 
@@ -983,10 +985,10 @@ namespace AiTerrainWorkflow.LayerEditor
             _project.WriteMap("height", data);
             if (_heightPreview != null)
                 Object.DestroyImmediate(_heightPreview);
-            _heightPreview = MapDataTextureUtils.ToTexture(data, 0f, 1f);
+            _heightPreview = MapDataTextureUtils.ToTexture(data, out _lastHeightMin, out _lastHeightMax);
             _project.RefreshMapDataRefs(true);
             EditorUtility.SetDirty(_project);
-            Debug.Log($"[Terrain Paint Workflow] 高度数据烘焙完成，已写入 MapData/height.txt，范围 [{_project.heightMin:F2}, {_project.heightMax:F2}]");
+            Debug.Log($"[Terrain Paint Workflow] 高度数据烘焙完成，已写入 MapData/height.txt，范围 [{_lastHeightMin:F2}, {_lastHeightMax:F2}]");
             Repaint();
         }
 
@@ -1345,6 +1347,11 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
+            // 距离场以真实值落盘；显示用范围由数据现算（不持久化）
+            _lastRMax = 0f;
+            for (int i = 0; i < rArr.Length; i++)
+                if (rArr[i] > _lastRMax) _lastRMax = rArr[i];
+
             // 写 MapData：R/G/B 三个 key（不再落 PNG；图片仅作内存预览）
             _project.WriteMap("distance", CsvArrayCodec.ToJagged(rArr, w, h));
             _project.WriteMap("occupancy", CsvArrayCodec.ToJagged(gArr, w, h));
@@ -1357,7 +1364,7 @@ namespace AiTerrainWorkflow.LayerEditor
             _resultPreview = tex;
 
             Debug.Log($"[Terrain Paint Workflow] 距离场/路网计算完成，已写入 MapData: distance/occupancy/road.txt" +
-                      $"（{_project.layers.Count} 层 / {_project.groupMaxD?.Length ?? 0} 个组合层）");
+                      $"（{_project.layers.Count} 层 / {TerrainRoadGen.GroupLayers(_project).Count} 个组合层）");
             Repaint();
         }
 
@@ -1375,8 +1382,16 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             int h = r.Length;
             int w = r[0].Length;
+            var rFlat = CsvArrayCodec.ToFlat(r);
+            // distance 为真实值，显示合成前按数据现算 max 归一化（范围不持久化）
+            _lastRMax = 0f;
+            for (int i = 0; i < rFlat.Length; i++)
+                if (rFlat[i] > _lastRMax) _lastRMax = rFlat[i];
+            if (_lastRMax > 0f)
+                for (int i = 0; i < rFlat.Length; i++)
+                    rFlat[i] /= _lastRMax;
             _resultPreview = TerrainRoadGen.ComposeRgb(
-                CsvArrayCodec.ToFlat(r), CsvArrayCodec.ToFlat(g), CsvArrayCodec.ToFlat(b), w, h);
+                rFlat, CsvArrayCodec.ToFlat(g), CsvArrayCodec.ToFlat(b), w, h);
         }
 
         // ---------- ③ 树木编辑（占位） ----------

@@ -12,22 +12,38 @@ namespace AiTerrainWorkflow.LayerEditor
     public static class MapDataTextureUtils
     {
         /// <summary>
-        /// float[][] → 灰度图（R=G=B=归一化值）。min/max 用于归一化；
-        /// 传 min=0, max=1 时数据按原值显示（数据本身已归一化时最常用）。
+        /// float[][] → 灰度图（R=G=B=归一化值）。**范围完全由数据现算**（内部先遍历统计真实 min/max，
+        /// 不依赖外部记录），并通过 out 参数传出；避免"记录的范围"与数据不同步。
         /// </summary>
-        public static Texture2D ToTexture(float[][] data, float min = 0f, float max = 1f)
+        public static Texture2D ToTexture(float[][] data, out float min, out float max)
         {
             int h = data?.Length ?? 0;
             int w = h > 0 && data[0] != null ? data[0].Length : 0;
+            min = 0f;
+            max = 0f;
             if (w <= 0 || h <= 0)
                 return null;
+
+            // 第一遍：统计真实 min/max（范围由数据产生）
+            min = float.MaxValue;
+            max = float.MinValue;
+            for (int y = 0; y < h; y++)
+            {
+                var row = data[y];
+                for (int x = 0; x < w; x++)
+                {
+                    float v = row[x];
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
+            }
 
             var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
             tex.filterMode = FilterMode.Point;
             tex.wrapMode = TextureWrapMode.Clamp;
 
-            var px = new Color32[w * h];
             float range = max - min;
+            var px = new Color32[w * h];
             for (int y = 0; y < h; y++)
             {
                 var row = data[y];

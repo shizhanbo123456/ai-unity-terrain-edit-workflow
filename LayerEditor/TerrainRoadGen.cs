@@ -353,7 +353,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // ---------- 一键计算（多组合层） ----------
 
-        /// <summary>解析层ID并按全部组合层计算 R/G/B，返回合成 RGB 图。若邻接组存在重复层级则报错返回 null。</summary>
+        /// <summary>解析层ID并按全部组合层计算 R/G/B，返回合成 RGB 图；rOut 为真实距离值（可直接写 distance MapData）。
+        /// 若邻接组存在重复层级则报错返回 null。</summary>
         public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds,
             out float[] rOut, out float[] gOut, out float[] bOut)
         {
@@ -384,13 +385,11 @@ namespace AiTerrainWorkflow.LayerEditor
             var r = new float[w * h];
             var g = new float[w * h];
             var b = new float[w * h];
-            project.groupMaxD = new float[groups.Count];
 
             for (int gi = 0; gi < groups.Count; gi++)
             {
                 var group = groups[gi];
-                var rg = ComputeR(layerIds, w, h, group, out float maxD);
-                project.groupMaxD[gi] = maxD;
+                var rg = ComputeR(layerIds, w, h, group, out _);
                 for (int i = 0; i < r.Length; i++)
                     r[i] = Mathf.Max(r[i], rg[i]);
 
@@ -403,24 +402,26 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
             }
 
-            // R 通道归一化：计算全局 max 并归一化 r（恢复：r = R * rMax）
-            float rMax = 0f;
-            for (int i = 0; i < r.Length; i++)
-                if (r[i] > rMax) rMax = r[i];
-            project.rMax = rMax;
-            if (rMax > 0f)
-            {
-                for (int i = 0; i < r.Length; i++)
-                    r[i] = r[i] / rMax;
-            }
-
+            // distance 以真实距离值输出（不归一化）；显示图 R 通道用现算 max 归一化（范围由数据产生，不持久化）
             rOut = r;
             gOut = g;
             bOut = b;
-            return ComposeRgb(r, g, b, w, h);
+
+            float rMax = 0f;
+            for (int i = 0; i < r.Length; i++)
+                if (r[i] > rMax) rMax = r[i];
+
+            var rDisplay = r;
+            if (rMax > 0f)
+            {
+                rDisplay = new float[w * h];
+                for (int i = 0; i < r.Length; i++)
+                    rDisplay[i] = r[i] / rMax;
+            }
+            return ComposeRgb(rDisplay, g, b, w, h);
         }
 
-        /// <summary>合成 RGB 图：R=距离场，G=占用/间隔，B=路面掩码。</summary>
+        /// <summary>合成 RGB 图：R=距离场，G=占用/间隔，B=路面掩码。R 由调用方保证已归一化（显示语义）。</summary>
         public static Texture2D ComposeRgb(float[] r, float[] g, float[] b, int w, int h)
         {
             var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
@@ -443,10 +444,9 @@ namespace AiTerrainWorkflow.LayerEditor
         // ---------- 高度图烘焙（高度编辑子界面） ----------
 
         /// <summary>
-        /// 烘焙高度数据（float[][]）：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成；
-        /// 统计实际 min/max 写入 project.heightMin/heightMax；返回归一化到 [0,1] 的二维数组。
-        /// 恢复公式：h = r * (max - min) + min（r 为归一化值 [0,1]）。
-        /// MapData 存储层直接写本方法结果到 "height" key；预览图由窗口用 ToTexture 生成。
+        /// 烘焙高度数据（float[][]）：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成
+        /// **真实高度**（单位与层 heightRange 一致），不归一化、不持久化范围。
+        /// MapData 存储层直接写本方法结果到 "height" key；显示/构建时遍历数据现算 min/max。
         /// </summary>
         public static float[][] BakeHeightData(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
         {
@@ -460,8 +460,6 @@ namespace AiTerrainWorkflow.LayerEditor
             float seedOff = project.heightSeed * 13.37f;
 
             var data = new float[h][];
-            float hmin = float.MaxValue;
-            float hmax = float.MinValue;
 
             for (int y = 0; y < h; y++)
             {
@@ -474,33 +472,19 @@ namespace AiTerrainWorkflow.LayerEditor
                         ? project.layers[lid].heightRange
                         : new Vector2(0f, 0f);
 
-                    // Perlin 噪声（seed 偏移 + 空间频率 scale），在层级高度范围内插值
+                    // Perlin 噪声（seed 偏移 + 空间频率 scale），在层级高度范围内插值（真实高度，不归一化）
                     float n = Mathf.PerlinNoise(x * scale + seedOff, y * scale + seedOff);
                     row[x] = Mathf.Lerp(range.x, range.y, n);
-
-                    if (row[x] < hmin) hmin = row[x];
-                    if (row[x] > hmax) hmax = row[x];
                 }
                 data[y] = row;
             }
-
-            // 防除零：范围过小时强制拉开
-            if (hmax - hmin < 0.0001f)
-                hmax = hmin + 1f;
-
-            project.heightMin = hmin;
-            project.heightMax = hmax;
-
-            // 归一化到 [0,1]
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++)
-                    data[y][x] = (data[y][x] - hmin) / (hmax - hmin);
 
             return data;
         }
 
         /// <summary>
-        /// 烘焙高度图（Texture2D，兼容旧接口）：调用 <see cref="BakeHeightData"/> 后把归一化高度写入 R 通道。
+        /// 烘焙高度图（Texture2D，兼容旧接口）：调用 <see cref="BakeHeightData"/> 后，
+        /// 内部现算 min/max 把真实高度归一化写入 R 通道（显示语义；范围不持久化）。
         /// 窗口已改用数据路径，本方法保留供外部/调试使用。
         /// </summary>
         public static Texture2D BakeHeightMap(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
@@ -512,12 +496,25 @@ namespace AiTerrainWorkflow.LayerEditor
             var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
             tex.filterMode = FilterMode.Point;
             tex.wrapMode = TextureWrapMode.Clamp;
+
+            // 现算真实 min/max（范围由数据产生，不持久化）
+            float hmin = float.MaxValue, hmax = float.MinValue;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    float v = data[y][x];
+                    if (v < hmin) hmin = v;
+                    if (v > hmax) hmax = v;
+                }
+            float range = hmax - hmin;
+            if (range < 0.0001f) range = 1f;
+
             var px = new Color32[w * h];
             for (int y = 0; y < h; y++)
             {
                 for (int x = 0; x < w; x++)
                 {
-                    byte b = (byte)Mathf.RoundToInt(Mathf.Clamp01(data[y][x]) * 255f);
+                    byte b = (byte)Mathf.RoundToInt(Mathf.Clamp01((data[y][x] - hmin) / range) * 255f);
                     px[y * w + x] = new Color32(b, 0, 0, 255);
                 }
             }

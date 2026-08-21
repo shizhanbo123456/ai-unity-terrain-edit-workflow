@@ -46,7 +46,7 @@ namespace AiTerrainWorkflow.LayerEditor
     ///
     /// 字段按四个子界面用 Header 划分专属配置：
     ///   - 区域编辑：层次图（layerMap，绘画画布）
-    ///   - 高度编辑：heightSeed / heightScale / smoothStep / smoothIterations / heightMin / heightMax / heightMap
+    ///   - 高度编辑：heightSeed / heightScale / smoothStep / smoothIterations
     ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
     ///   - 树木编辑 / 细节编辑：Prefab 池（treePrefabs / detailPrefabs）
     /// </summary>
@@ -114,13 +114,6 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("高度图平滑迭代：十字线均值滤波采样半径，采样点数=1+4*迭代（暂未参与运算）")]
         public int smoothIterations = 0;
 
-        [HideInInspector, Tooltip("烘焙高度图时自动写入的实际高度最小/最大值")]
-        public float heightMin;
-        [HideInInspector, Tooltip("烘焙高度图时自动写入的实际高度最小/最大值")]
-        public float heightMax;
-        [Tooltip("高度图（归一化高度写入 R 通道；恢复公式 h = r*(max-min)+min）")]
-        public Texture2D heightMap;
-
         // ---------- 树木编辑 ----------
 
         [Header("树木编辑")]
@@ -135,13 +128,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // ---------- 计算结果（贴图编辑 · 信息生成） ----------
 
-        [HideInInspector, Tooltip("各组合层级的距离场全局最大值（自动计算）")]
-        public float[] groupMaxD;
-
-        [HideInInspector, Tooltip("R 通道距离场数组的全局最大值（自动计算；R 通道归一化用 r/rMax，恢复 r = R*rMax）")]
-        public float rMax;
-
-        [Tooltip("计算结果图（RGB：R=距离场，G=占用/间隔，B=路面掩码）")]
+        [Tooltip("计算结果图（RGB：R=距离场（显示用，已按数据现算范围归一化），G=占用/间隔，B=路面掩码）")]
         public Texture2D resultTexture;
 
         // ---------- MapData 栅格数据（存储层） ----------

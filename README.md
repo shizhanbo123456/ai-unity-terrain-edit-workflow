@@ -10,7 +10,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 | 原则 | 说明 |
 |---|---|
-| 配置驱动 | 工作流最终产出 = **引用美术/模型素材的配置数据**（主配置 `TerrainPaintProjectSO`）；中间图（layerMap/RGB/heightMap）仅为编辑期可视化，**不再是交付物** |
+| 配置驱动 | 工作流最终产出 = **引用美术/模型素材的配置数据**（主配置 `TerrainPaintProjectSO`）；中间图（layerMap/RGB/高度预览）仅为编辑期可视化，**不再是交付物** |
 | 数据优先 | 栅格数据一律以 `float[][]` 为最终形态，存为 CSV txt（MapData）；**运行时只读 float[][]，图片仅供人看** |
 | 构建端分离 | 运行时/编辑器靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/植被/树 + 实例化摆件） |
 | bridge 按需 | `unity-python-bridge` 只是按需取用的外围工具（量尺寸/截图/可选一键构建），**不参与主链路** |
@@ -64,14 +64,14 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ### 阶段 2 · 高度编辑 [已完成]
 
-- 逐像素按所在层的 `heightRange`，用 Perlin 噪声（`heightSeed` + `heightScale` 频率）插值生成高度。
-- 统计实际 min/max 写入主配置 `heightMin/heightMax`；归一化到 [0,1] 后写入 `MapData/height.txt`（float[][]）。
-- 恢复公式：`h = r * (max - min) + min`。预览图由窗口用 `MapDataTextureUtils.ToTexture` 生成，**不落盘**。
+- 逐像素按所在层的 `heightRange`，用 Perlin 噪声（`heightSeed` + `heightScale` 频率）插值生成**真实高度**。
+- 真实高度直接写入 `MapData/height.txt`（float[][]，**不归一化**）；**范围不持久化**，由显示 / 构建时遍历数据现算（`ToTexture` 统计后以 `out` 传出）。
+- 预览图由窗口用 `MapDataTextureUtils.ToTexture` 生成，**不落盘**。
 
 ### 阶段 3 · 贴图编辑 [已完成]
 
-- 链路：`ParseLayerIds`（色→层ID）→ `GroupLayers`（邻接组，冲突阻断）→ `ComputeR`（Felzenszwalb 欧氏距离场，全局 rMax 归一化）→ `GenerateRoads`（随机游走，G=占用/间隔缓冲，B=路面硬掩码）。
-- 结果写入三个 MapData key：`distance`（R）/ `occupancy`（G）/ `road`（B）。
+- 链路：`ParseLayerIds`（色→层ID）→ `GroupLayers`（邻接组，冲突阻断）→ `ComputeR`（Felzenszwalb 欧氏距离场；范围由数据现算，不持久化）→ `GenerateRoads`（随机游走，G=占用/间隔缓冲，B=路面硬掩码）。
+- 结果写入三个 MapData key：`distance`（R，**真实距离值**）/ `occupancy`（G）/ `road`（B）。**范围不持久化**：预览 RGB 图的 R 通道由数据现算 max 归一化，构建时同样现算。
 - **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。
 
 ### 阶段 4 · 摆件编辑 [暂留空]
@@ -100,7 +100,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ```
 1 PrepareTerrain  尺寸/分辨率/材质（terrainSpec）
-2 ApplyHeight     SetHeights(height 数据)
+2 ApplyHeight     遍历 height 现算 min/max → 归一化 [0,1] → SetHeights
 3 ApplyAlphamap   ⭐构建时生成权重（见下）
 4 ApplyDetail     按各层 detailPositions + DetailSeed/权重 → SetDetailLayer
 5 ApplyTrees       按各层 treePositions + TreeSeed/权重 → SetTreeInstances
@@ -108,7 +108,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 7 PostProcess      碰撞、静态标记、光照贴图参数
 ```
 
-- **ApplyAlphamap 草案**：逐像素 `L = layerMap[p]`，`base = road[p]>0.5 ? roadLayerWeights[L] : naturalLayerWeights[L]`；对权重>0 的层叠加独立 Perlin 噪声打破条带（`w[i] = base[i] × (1 - blendSoft + blendSoft × n)`），可选按 `distance` 做层边界渐变，归一化 Σw=1 → SetAlphamaps。参数（noiseScale / blendSoft / 是否距离场过渡）**[待设计]**；**seed 均为全局 seed**。
+- **ApplyAlphamap 草案**：逐像素 `L = layerMap[p]`，`base = road[p]>0.5 ? roadLayerWeights[L] : naturalLayerWeights[L]`；对权重>0 的层叠加独立 Perlin 噪声打破条带（`w[i] = base[i] × (1 - blendSoft + blendSoft × n)`），可选按 `distance`（构建时现算归一化）做层边界渐变，归一化 Σw=1 → SetAlphamaps。参数（noiseScale / blendSoft / 是否距离场过渡）**[待设计]**；**seed 均为全局 seed**。
 - **L = -1（透明区域）的权重方案 [待设计]**：默认纹理权重或全 0，见阶段 1 的透明区域特殊处理。
 
 ### 阶段 8 · 运行时 [待设计]
