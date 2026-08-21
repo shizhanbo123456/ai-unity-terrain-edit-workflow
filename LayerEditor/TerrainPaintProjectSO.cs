@@ -67,26 +67,6 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("层次图（配置文件夹内资产；区域编辑子界面的画布）")]
         public Texture2D layerMap;
 
-        // ---------- 贴图编辑 ----------
-
-        [Header("贴图编辑")]
-        [Tooltip("全局参数（随机游走 / 贴图混合 / 坐标换算）")]
-        public TerrainPaintConfig config = new TerrainPaintConfig();
-
-        [Tooltip("自然贴图 value-noise 种子（全局，不细化到层级）")]
-        public int naturalSeed = 0;
-        [Tooltip("道路贴图 value-noise 种子（全局，不细化到层级）")]
-        public int roadSeed = 0;
-
-        [Tooltip("用于自然地面的 TerrainLayer 列表。各层级 LayerConfigSO.naturalLayerWeights 的索引对应本池。")]
-        public List<TerrainLayer> naturalTerrainLayers = new List<TerrainLayer>();
-
-        [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
-        public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
-
-        [Tooltip("邻接组（组合层级分组）：每个组是一个层级索引列表，如 {{1,2,3},{4,5}}。同一层级不可出现在多个组中（会校验报错）。")]
-        public List<List<int>> adjacencyGroups = new List<List<int>>();
-
         // ---------- 高度编辑 ----------
 
         [Header("高度编辑")]
@@ -113,6 +93,26 @@ namespace AiTerrainWorkflow.LayerEditor
         /// </summary>
         [Tooltip("高度图平滑迭代：十字线均值滤波采样半径，采样点数=1+4*迭代（暂未参与运算）")]
         public int smoothIterations = 0;
+
+        // ---------- 贴图编辑 ----------
+
+        [Header("贴图编辑")]
+        [Tooltip("全局参数（随机游走 / 贴图混合 / 坐标换算）")]
+        public TerrainPaintConfig config = new TerrainPaintConfig();
+
+        [Tooltip("自然贴图 value-noise 种子（全局，不细化到层级）")]
+        public int naturalSeed = 0;
+        [Tooltip("道路贴图 value-noise 种子（全局，不细化到层级）")]
+        public int roadSeed = 0;
+
+        [Tooltip("用于自然地面的 TerrainLayer 列表。各层级 LayerConfigSO.naturalLayerWeights 的索引对应本池。")]
+        public List<TerrainLayer> naturalTerrainLayers = new List<TerrainLayer>();
+
+        [Tooltip("用于道路的 TerrainLayer 列表。各层级 LayerConfigSO.roadLayerWeights 的索引对应本池。")]
+        public List<TerrainLayer> roadTerrainLayers = new List<TerrainLayer>();
+
+        [Tooltip("邻接组（组合层级分组）：每个组是一个层级索引列表，如 {{1,2,3},{4,5}}。同一层级不可出现在多个组中（会校验报错）。")]
+        public List<List<int>> adjacencyGroups = new List<List<int>>();
 
         // ---------- 树木编辑 ----------
 
