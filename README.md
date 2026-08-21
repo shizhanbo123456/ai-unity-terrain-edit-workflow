@@ -15,6 +15,14 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 构建端分离 | 运行时/编辑器靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/植被/树 + 实例化摆件） |
 | bridge 按需 | `unity-python-bridge` 只是按需取用的外围工具（量尺寸/截图/可选一键构建），**不参与主链路** |
 
+## 名词解释
+
+| 名词 | 含义 |
+|---|---|
+| 工作流项目 | `TerrainGeneratorConfigs` 目录下的一个文件夹；一个文件夹 = 一套完整的地形工作流配置（含主配置 SO + 各层级 SO + MapData）。 |
+| 主配置 | `TerrainPaintProjectSO`（ScriptableObject）：地形工作流的总配置，聚合素材池 / 规则 / 邻接组 / mapResolution / MapData 接口，是编辑器窗口与 `TerrainBuilder` 的单一数据入口。 |
+| 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的配置（颜色 / 名称 / 权重 / 高度范围 / 道路参数，以及后续的树 / 细节位置列表）；数量 2~16，从属于主配置。 |
+
 ## 完整工作流
 
 ```
