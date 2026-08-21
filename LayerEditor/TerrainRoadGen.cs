@@ -138,7 +138,7 @@ namespace AiTerrainWorkflow.LayerEditor
         /// <summary>
         /// 计算 offRoad 距离场：语义层（层 ID ≥1，排除 -1 透明与 Layer0）拼合区域内，
         /// 非道路像素到最近道路像素的欧氏距离（像素 → × worldPerPixel 转**米**）；道路像素=0，拼合区域外=0。
-        /// 树木生成时按所在层 roadDistanceLimit 过滤（offRoad &lt; limit 的位置不生成）。
+        /// 树木/细节生成时按所在层 treeRoadDistanceLimit / detailRoadDistanceLimit 过滤（offRoad &lt; limit 的位置不生成）。
         /// </summary>
         public static float[] ComputeOffRoad(int[] layerIds, float[] road, int w, int h, float worldPerPixel)
         {

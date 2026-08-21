@@ -130,11 +130,6 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("细节网格/草 Prefab 池（细节编辑 · 全局配置中的物理列表）")]
         public List<GameObject> detailPrefabs = new List<GameObject>();
 
-        // ---------- 计算结果（贴图编辑 · 信息生成） ----------
-
-        [Tooltip("计算结果图（RGB：R=距离场（显示用，已按数据现算范围归一化），G=占用/间隔，B=路面掩码）")]
-        public Texture2D resultTexture;
-
         // ---------- MapData 栅格数据（存储层） ----------
 
         /// <summary>MapData 子目录名（位于配置文件夹下）。</summary>
