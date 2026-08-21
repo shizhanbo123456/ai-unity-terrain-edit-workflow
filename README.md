@@ -149,7 +149,7 @@ LayerEditor/
 ├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
 ├── TerrainBuilder.cs           [进行中] 构建组件（阶段 7：树木/细节区块化对象池生成已实现；高度/纹理/摆件待开发）
 └── Editor/
-    ├── LayerEditorWindow.cs    [已完成] 工作流窗口（六子界面 + 创建向导尺寸单选 + MapData 接线）
+    ├── LayerEditorWindow.cs    [已完成] 工作流窗口（五子界面：植被编辑 = 树木+细节左右并排 + 创建向导尺寸单选 + MapData 接线）
     └── MapDataTextureUtils.cs  [已完成] float[][]↔Texture2D（仅显示/采集）
 
 Editor/
@@ -163,7 +163,7 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 
 - `Tools / Terrain Edit Workflow / Log Version`：打印版本号。
 - `Tools / Terrain Edit Workflow / Open Terrain Paint Workflow`：打开工作流窗口。
-- 窗口六个子界面：工作流配置（含栅格分辨率） / 区域编辑 / 高度编辑 / 贴图编辑 / 摆件编辑 **[暂留空]** / 树木编辑 **[进行中]**（生成配置编辑可用）/ 细节编辑 **[进行中]**（生成配置编辑可用）。
+- 窗口五个子界面：工作流配置（含栅格分辨率） / 区域编辑 / 高度编辑 / 贴图编辑 / 植被编辑（**树木 + 细节合并**：左栏 = 树木配置、右栏 = 细节配置，均含全局与每层生成参数）。
 
 ## 与 unity-python-bridge 的关系 [按需]
 

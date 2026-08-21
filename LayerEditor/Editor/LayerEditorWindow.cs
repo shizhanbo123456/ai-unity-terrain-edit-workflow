@@ -9,11 +9,12 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 顶层六个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 树木编辑 / 细节编辑。
+    /// 顶层五个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 植被编辑。
     /// 「工作流配置」整页显示：工作流图（层次图/RGB 图）、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）、Terrain 字段（窗口内临时，不入 SO）。
+    /// 「植被编辑」为左右两栏配置并排：左栏 = 原树木编辑配置（全局 + 每层），右栏 = 原细节编辑配置（全局 + 每层），各自独立滚动与折叠。
     /// 其余编辑子界面为左右分栏布局：
     ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠），整体共同滚动
-    ///   右栏（宽）：信息生成（区域编辑=画布绘制；高度编辑=烘焙高度图；贴图编辑=距离场/路网计算；其余占位）
+    ///   右栏（宽）：信息生成（区域编辑=画布绘制；高度编辑=烘焙高度图；贴图编辑=距离场/路网计算）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -28,15 +29,14 @@ namespace AiTerrainWorkflow.LayerEditor
             TriangleFill,
         }
 
-        /// <summary>顶层六个子界面（工作流配置无子页签）。</summary>
+        /// <summary>顶层五个子界面（工作流配置无子页签；植被编辑 = 原树木 + 细节合并）。</summary>
         private enum MainTab
         {
             WorkflowConfig,
             AreaEdit,
             HeightEdit,
             Texture,
-            TreeEdit,
-            DetailEdit,
+            VegetationEdit,
         }
 
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
@@ -59,6 +59,12 @@ namespace AiTerrainWorkflow.LayerEditor
         // 左栏配置滚动状态（全局配置 + 层级配置 共同滚动）
         private Vector2 _configScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
+
+        // 植被编辑（树木 + 细节左右并排）：两栏各自独立滚动与折叠
+        private Vector2 _treeScroll;
+        private Vector2 _detailScroll;
+        private readonly List<bool> _treeFoldouts = new List<bool>();
+        private readonly List<bool> _detailFoldouts = new List<bool>();
 
         // 区域编辑子界面状态
         private Tool _tool = Tool.CircleBrush;
@@ -158,6 +164,13 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
+            // 植被编辑：左右两栏配置并排（左=树木，右=细节）
+            if (_mainTab == MainTab.VegetationEdit)
+            {
+                DrawVegetationEditView();
+                return;
+            }
+
             // 编辑子界面：左右分栏（左=全局/层级配置，右=信息生成）
             DrawEditSplitView();
         }
@@ -221,8 +234,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.FlexibleSpace();
 
-            // 六个子界面切换按钮（靠右）
-            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "贴图编辑", "树木编辑", "细节编辑" };
+            // 五个子界面切换按钮（靠右；植被编辑 = 原树木 + 细节合并）
+            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "贴图编辑", "植被编辑" };
             int newMain = GUILayout.Toolbar((int)_mainTab, mainNames, EditorStyles.toolbarButton);
             if (newMain != (int)_mainTab)
             {
@@ -489,8 +502,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 case MainTab.AreaEdit: DrawAreaGlobalConfig(); break;
                 case MainTab.HeightEdit: DrawHeightGlobalConfig(); break;
                 case MainTab.Texture: DrawTextureGlobalConfig(); break;
-                case MainTab.TreeEdit: DrawTreeGlobalConfig(); break;
-                case MainTab.DetailEdit: DrawDetailGlobalConfig(); break;
             }
             EditorUtility.SetDirty(_project);
         }
@@ -594,10 +605,10 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        /// <summary>树木编辑 · 全局配置：种子 / 区块参数 / 树木 Prefab 池。</summary>
+        /// <summary>树木 · 全局配置（植被编辑左栏）：种子 / 区块参数 / 树木 Prefab 池。</summary>
         private void DrawTreeGlobalConfig()
         {
-            EditorGUILayout.LabelField("树木编辑 · 全局配置", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("树木 · 全局配置", EditorStyles.boldLabel);
 
             _project.treeSeed = EditorGUILayout.IntField("树木 Seed（全局）", _project.treeSeed);
             _project.treeChunkSize = EditorGUILayout.Vector2Field("区块尺寸（米，x/z）", _project.treeChunkSize);
@@ -608,10 +619,10 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawPrefabPool(_project.treePrefabs, "树木");
         }
 
-        /// <summary>细节编辑 · 全局配置：种子 / 区块参数 / 细节 Prefab 池。</summary>
+        /// <summary>细节 · 全局配置（植被编辑右栏）：种子 / 区块参数 / 细节 Prefab 池。</summary>
         private void DrawDetailGlobalConfig()
         {
-            EditorGUILayout.LabelField("细节编辑 · 全局配置", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("细节 · 全局配置", EditorStyles.boldLabel);
 
             _project.detailSeed = EditorGUILayout.IntField("细节 Seed（全局）", _project.detailSeed);
             _project.detailChunkSize = EditorGUILayout.Vector2Field("区块尺寸（米，x/z）", _project.detailChunkSize);
@@ -678,42 +689,22 @@ namespace AiTerrainWorkflow.LayerEditor
                         DrawLayerConfig(i, layer);
                     }
                     break;
-
-                case MainTab.TreeEdit:
-                    EditorGUILayout.LabelField("层级配置 · 树木编辑（每层树木生成权重）", EditorStyles.boldLabel);
-                    for (int i = 0; i < _project.layers.Count; i++)
-                    {
-                        var layer = _project.layers[i];
-                        if (layer == null) continue;
-                        DrawTreeLayerConfig(i, layer);
-                    }
-                    break;
-
-                case MainTab.DetailEdit:
-                    EditorGUILayout.LabelField("层级配置 · 细节编辑（每层细节生成权重）", EditorStyles.boldLabel);
-                    for (int i = 0; i < _project.layers.Count; i++)
-                    {
-                        var layer = _project.layers[i];
-                        if (layer == null) continue;
-                        DrawDetailLayerConfig(i, layer);
-                    }
-                    break;
             }
             EditorUtility.SetDirty(_project);
         }
 
-        /// <summary>树木编辑 · 单个层级的配置：密度/缩放/离路限制 + 树木生成权重列表。</summary>
-        private void DrawTreeLayerConfig(int index, LayerConfigSO layer)
+        /// <summary>树木 · 单个层级的配置：密度/缩放/离路限制 + 树木生成权重列表（foldouts = 界面独立折叠状态）。</summary>
+        private void DrawTreeLayerConfig(int index, LayerConfigSO layer, List<bool> foldouts)
         {
             EditorGUILayout.BeginHorizontal();
-            bool open = _layerFoldouts[index];
+            bool open = foldouts[index];
 
             var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
             var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
             DrawTinted(swatchRect, c);
 
             open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
-            _layerFoldouts[index] = open;
+            foldouts[index] = open;
             EditorGUILayout.EndHorizontal();
 
             if (!open)
@@ -732,18 +723,18 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorUtility.SetDirty(layer);
         }
 
-        /// <summary>细节编辑 · 单个层级的配置：密度/缩放/离路限制 + 细节生成权重列表。</summary>
-        private void DrawDetailLayerConfig(int index, LayerConfigSO layer)
+        /// <summary>细节 · 单个层级的配置：密度/缩放/离路限制 + 细节生成权重列表（foldouts = 界面独立折叠状态）。</summary>
+        private void DrawDetailLayerConfig(int index, LayerConfigSO layer, List<bool> foldouts)
         {
             EditorGUILayout.BeginHorizontal();
-            bool open = _layerFoldouts[index];
+            bool open = foldouts[index];
 
             var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
             var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
             DrawTinted(swatchRect, c);
 
             open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
-            _layerFoldouts[index] = open;
+            foldouts[index] = open;
             EditorGUILayout.EndHorizontal();
 
             if (!open)
@@ -941,8 +932,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 case MainTab.AreaEdit: DrawAreaEditView(); break;
                 case MainTab.HeightEdit: DrawHeightEditView(); break;
                 case MainTab.Texture: DrawTextureView(); break;
-                case MainTab.TreeEdit: DrawTreeEditView(); break;
-                case MainTab.DetailEdit: DrawDetailEditView(); break;
             }
         }
 
@@ -1424,24 +1413,67 @@ namespace AiTerrainWorkflow.LayerEditor
                 rFlat, CsvArrayCodec.ToFlat(g), CsvArrayCodec.ToFlat(b), w, h);
         }
 
-        // ---------- ③ 树木编辑（信息生成 = 占位；配置编辑在左栏） ----------
+        // ---------- ③ 植被编辑（树木 + 细节合并界面：左栏树木配置，右栏细节配置） ----------
 
-        private void DrawTreeEditView()
+        /// <summary>
+        /// 植被编辑子界面：左右两栏配置并排，各自独立滚动与折叠。
+        /// 左栏 = 原树木编辑配置（全局：Seed/区块/Prefab 池 + 每层：密度/缩放/离路限制/权重）；
+        /// 右栏 = 原细节编辑配置（全局：Seed/区块/Prefab 池 + 每层：密度/缩放/离路限制/权重）。
+        /// 树木/细节位置均不在此生成：构建时由 TerrainBuilder.SetCameraPosition 按区块动态生成（见 README 阶段 5/6/7）。
+        /// </summary>
+        private void DrawVegetationEditView()
         {
-            EditorGUILayout.HelpBox(
-                "树木生成配置（Seed / 区块 / Prefab 池 / 每层密度、缩放、离路限制、权重）在左栏编辑。\n" +
-                "位置**不在此生成**：构建时由 TerrainBuilder.SetCameraPosition 按区块动态生成（见 README 阶段 5/7）。",
-                MessageType.Info);
+            const float colWidth = 360f;
+
+            EditorGUILayout.BeginHorizontal();
+
+            // 左栏：树木配置（全局 + 层级，共同滚动）
+            EditorGUILayout.BeginVertical(GUILayout.Width(colWidth));
+            _treeScroll = EditorGUILayout.BeginScrollView(_treeScroll);
+            DrawTreeGlobalConfig();
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("层级配置 · 树木（每层树木生成权重）", EditorStyles.boldLabel);
+            EnsureFoldoutCount(_treeFoldouts);
+            for (int i = 0; i < _project.layers.Count; i++)
+            {
+                var layer = _project.layers[i];
+                if (layer == null) continue;
+                DrawTreeLayerConfig(i, layer, _treeFoldouts);
+            }
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+
+            // 分隔线
+            EditorGUILayout.BeginVertical(GUILayout.Width(6));
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndVertical();
+
+            // 右栏：细节配置（全局 + 层级，共同滚动）
+            EditorGUILayout.BeginVertical(GUILayout.Width(colWidth));
+            _detailScroll = EditorGUILayout.BeginScrollView(_detailScroll);
+            DrawDetailGlobalConfig();
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("层级配置 · 细节（每层细节生成权重）", EditorStyles.boldLabel);
+            EnsureFoldoutCount(_detailFoldouts);
+            for (int i = 0; i < _project.layers.Count; i++)
+            {
+                var layer = _project.layers[i];
+                if (layer == null) continue;
+                DrawDetailLayerConfig(i, layer, _detailFoldouts);
+            }
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.EndHorizontal();
+            EditorUtility.SetDirty(_project);
         }
 
-        // ---------- ④ 细节编辑（信息生成 = 占位；配置编辑在左栏） ----------
-
-        private void DrawDetailEditView()
+        /// <summary>保持折叠状态列表长度与 Layer 数量一致（截断或补 false）。</summary>
+        private void EnsureFoldoutCount(List<bool> foldouts)
         {
-            EditorGUILayout.HelpBox(
-                "细节生成配置（Seed / 区块 / Prefab 池 / 每层密度、缩放、离路限制、权重）在左栏编辑。\n" +
-                "位置**不在此生成**：构建时由 TerrainBuilder.SetCameraPosition 按区块动态生成（见 README 阶段 6/7）。",
-                MessageType.Info);
+            int n = _project != null ? _project.layers.Count : 0;
+            while (foldouts.Count < n) foldouts.Add(false);
+            if (foldouts.Count > n) foldouts.RemoveRange(n, foldouts.Count - n);
         }
 
         // ---------- 区域编辑工具函数（沿用原实现） ----------
