@@ -27,8 +27,12 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ## 注意 · 距离语义
 
-- **map 与 terrain 的尺寸无确定关系**：map（栅格，尺寸 = 主配置 `mapResolution`）与实际 Terrain 的尺寸没有固定换算；map 中每个点与 terrain 中每个点存在映射关系，**可理解为 map 是 terrain 的俯视图**。
-- **单位约定**：提到距离为 **（整数 / 像素）** 时，指它们在 map 上（或映射到 map 上）的距离；提到距离为 **（float / 米）** 时，指它们在 terrain 上（或映射到 terrain 上）的距离。换算系数 = `TerrainPaintConfig.worldPerPixel`（= Terrain 世界尺寸 / 图片分辨率）。
+- **map 与 terrain 的尺寸无固定比例**：map（栅格，尺寸 = 主配置 `mapResolution`）可映射到任意实际 Terrain 尺寸，**可理解为 map 是 terrain 的俯视图**；映射比例在给定 Terrain 后按其实际 X/Z 尺寸计算。
+- **像素中心对齐 Terrain 边界**：首个像素中心（数组索引 `(0,0)`）对应 Terrain 局部坐标 `(0,0)`，末个像素中心（数组索引 `(width-1,height-1)`）对应 Terrain 局部坐标 `(terrainSize.x,terrainSize.z)`。口头所称 128×128 工作流的 `(128,128)` 表示其右上边界；实际数组末像素索引为 `(127,127)`。
+- **正向映射**：`localX = pixelX / (width - 1) * terrainSize.x`，`localZ = pixelZ / (height - 1) * terrainSize.z`；世界坐标还需加上 `terrain.transform.position`。反向映射为 `pixelX = localX / terrainSize.x * (width - 1)`、`pixelZ = localZ / terrainSize.z * (height - 1)`。
+- **边缘外扩半像素**：由于首末像素的中心落在 Terrain 两侧边界，像素图的实际覆盖范围会在 Terrain 四周各超出半个像素间距。这样 Terrain 边缘仍由完整的最外圈像素覆盖，可避免边缘权重、掩码或插值表现异常。反向采样时，离散数据（如 `layerMap` / `road`）取最近像素，连续数据（如 `height` / `distance` / `offRoad`）使用双线性插值；超出范围的采样钳制到最外圈像素。
+- **单位约定**：提到距离为 **（整数 / 像素）** 时，指它们在 map 上（或映射到 map 上）的距离；提到距离为 **（float / 米）** 时，指它们在 terrain 上（或映射到 terrain 上）的距离。给定 Terrain 后，像素中心间距分别为 `worldPerPixelX = terrainSize.x / (width - 1)`、`worldPerPixelZ = terrainSize.z / (height - 1)`；非正方形 Terrain 必须保留 X/Z 两个比例。现有 `TerrainPaintConfig.worldPerPixel` 是单值距离换算参数，使用时应遵守上述中心间距语义，后续构建端需按实际 Terrain 尺寸计算两轴比例。
+- **示例**：128×128 的 map 映射到 1024×1024 的 Terrain 时，索引 `0` 的像素中心对应局部坐标 `0`，索引 `127` 的像素中心对应 `1024`；相邻中心间距为 `1024 / 127 ≈ 8.063m`，单轴实际覆盖约为 `[-4.0315, 1028.0315]`。
 - 例：`distance`（R 通道）为像素距离（map 上）；`offRoad` 与 `treeRoadDistanceLimit` / `detailRoadDistanceLimit` 为米（terrain 上）。
 
 ## 完整工作流
