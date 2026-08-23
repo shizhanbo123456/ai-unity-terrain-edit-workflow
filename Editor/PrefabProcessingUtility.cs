@@ -381,7 +381,7 @@ namespace AiTerrainWorkflow.Editor
                     lodGroup = contentsRoot.AddComponent<LODGroup>();
                 lodGroup.SetLODs(new[]
                 {
-                    new LOD(0.5f, originalRenderers),
+                    new LOD(0.1f, originalRenderers),
                     new LOD(0.01f, billboardRenderers),
                 });
                 lodGroup.RecalculateBounds();

@@ -538,7 +538,8 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。
 - 批量添加在 BillboardMode 非 None 时会立即完成截图、材质、面片和 LOD 装配；批量更新 Billboard 可在之后统一重建。截图固定来自 `(0,0,1)`，并使用强度 2 的相机同向平行光；每个备用 Prefab 使用 `src/billboard.mat` 为模板创建独立的透明、双面、无阴影材质，并自动装入 `src/cross.prefab` 或 `src/linear.prefab`。两个面片 Prefab 均使用标准根 Transform，模型为第一个子物体；缩放基准为宽 2m、高 1m。面片 X/Z 中心对齐 Bounds 中心，底部枢轴对齐 Bounds 的 Y 最低点。
 - 生成目录固定为：`Generated/Prefabs/`（备用 Prefab）、`Generated/Billboards/`（PNG）、`Generated/Materials/`（派生材质）。`Generated/` 已从工具源码版本控制中排除。
-- Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1。
+- Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1；LOD0 在屏幕相对高度降至 10% 时切换到 LOD1，LOD1 在 1% 时剔除。
+- **已知问题（待后续解决）**：透明交叉面片存在渲染遮挡/排序异常，特定视角下可能表现为其中一个面片始终位于另一个面片前方。当前 Shader 的透明深度方案不能覆盖所有交叉透明面的排序情形，后续需要专门调整渲染方案。
 - 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
 - 应用页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds。
 
