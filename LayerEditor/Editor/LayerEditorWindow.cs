@@ -687,6 +687,18 @@ namespace AiTerrainWorkflow.LayerEditor
             if (_project == null || _terrainField == null)
                 return;
 
+            var prefabErrors = ValidatePlacementPrefabs();
+            if (prefabErrors.Count > 0)
+            {
+                string details = string.Join("\n", prefabErrors);
+                Debug.LogError("[Terrain Paint Workflow] 应用已阻止，备用预制体检查失败：\n" + details);
+                EditorUtility.DisplayDialog(
+                    "无法应用：备用预制体不符合要求",
+                    details,
+                    "确定");
+                return;
+            }
+
             int lastStage = 0;
             while (lastStage + 1 < _applyStages.Length && _applyStages[lastStage + 1])
                 lastStage++;
@@ -696,6 +708,74 @@ namespace AiTerrainWorkflow.LayerEditor
                 builder = Undo.AddComponent<TerrainBuilder>(_terrainField.gameObject);
 
             builder.Build(_project, _terrainField, (TerrainWorkflowStage)lastStage);
+        }
+
+        private List<string> ValidatePlacementPrefabs()
+        {
+            var errors = new List<string>();
+
+            for (int groupIndex = 0; groupIndex < _project.scatterGroups.Count; groupIndex++)
+            {
+                var group = _project.scatterGroups[groupIndex];
+                if (group == null) continue;
+                for (int prefabIndex = 0; prefabIndex < group.prefabs.Count; prefabIndex++)
+                {
+                    var entry = group.prefabs[prefabIndex];
+                    ValidatePlacementPrefab(
+                        entry != null ? entry.prefab : null,
+                        $"散布组[{groupIndex}] {group.groupName} / Prefab[{prefabIndex}]",
+                        errors);
+                }
+            }
+
+            for (int groupIndex = 0; groupIndex < _project.propGroups.Count; groupIndex++)
+            {
+                var group = _project.propGroups[groupIndex];
+                if (group == null) continue;
+                for (int prefabIndex = 0; prefabIndex < group.prefabs.Count; prefabIndex++)
+                {
+                    var entry = group.prefabs[prefabIndex];
+                    ValidatePlacementPrefab(
+                        entry != null ? entry.prefab : null,
+                        $"摆件组[{groupIndex}] {group.groupName} / Prefab[{prefabIndex}]",
+                        errors);
+                }
+            }
+
+            for (int groupIndex = 0; groupIndex < _project.fixedPointGroups.Count; groupIndex++)
+            {
+                var group = _project.fixedPointGroups[groupIndex];
+                if (group == null) continue;
+                ValidatePlacementPrefab(group.prefab, $"定点组[{groupIndex}]", errors);
+            }
+
+            return errors;
+        }
+
+        private static void ValidatePlacementPrefab(
+            GameObject prefab,
+            string location,
+            List<string> errors)
+        {
+            if (!PrefabProcessingUtility.IsProcessedCandidatePrefab(prefab, out string reason))
+            {
+                string path = prefab != null ? AssetDatabase.GetAssetPath(prefab) : "<空>";
+                errors.Add($"• {location}: {path} — {reason}");
+                return;
+            }
+
+            ValidateLodForFutureBillboard(prefab, location, errors);
+        }
+
+        /// <summary>
+        /// LOD/Billboard 挂载检查预留入口。后续确定 LOD 层级与 Billboard Renderer 规则后在此实现；
+        /// 当前不阻断应用。
+        /// </summary>
+        private static void ValidateLodForFutureBillboard(
+            GameObject prefab,
+            string location,
+            List<string> errors)
+        {
         }
 
         /// <summary>调整 Layer 数量：增层创建新 SO（末尾追加），减层删除末尾 SO 资产。</summary>
@@ -1607,8 +1687,8 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 if (prefabs[i] == null) prefabs[i] = new ScatterPrefabEntry();
                 EditorGUILayout.BeginHorizontal();
-                prefabs[i].prefab = (GameObject)EditorGUILayout.ObjectField(
-                    $"Prefab[{i}]", prefabs[i].prefab, typeof(GameObject), false);
+                prefabs[i].prefab = DrawProcessedCandidatePrefabField(
+                    $"Prefab[{i}]", prefabs[i].prefab);
                 GUILayout.Label("权重", GUILayout.Width(32f));
                 prefabs[i].weight = Mathf.Max(0,
                     EditorGUILayout.IntField(prefabs[i].weight, GUILayout.Width(54f)));
@@ -1618,6 +1698,28 @@ namespace AiTerrainWorkflow.LayerEditor
             }
             if (GUILayout.Button("+ 添加 Prefab"))
                 prefabs.Add(new ScatterPrefabEntry());
+        }
+
+        private static GameObject DrawProcessedCandidatePrefabField(string label, GameObject current)
+        {
+            EditorGUI.BeginChangeCheck();
+            var selected = (GameObject)EditorGUILayout.ObjectField(
+                label, current, typeof(GameObject), false);
+            if (!EditorGUI.EndChangeCheck() || selected == current)
+                return current;
+            if (selected == null)
+                return null;
+
+            if (PrefabProcessingUtility.IsProcessedCandidatePrefab(selected, out string reason))
+                return selected;
+
+            string path = AssetDatabase.GetAssetPath(selected);
+            Debug.LogError($"[Terrain Paint Workflow] 拒绝引用未经处理的 Prefab: {path} — {reason}");
+            EditorUtility.DisplayDialog(
+                "不能使用该 Prefab",
+                $"三个摆放模块只能引用本工具生成的备用预制体。\n\n{path}\n{reason}",
+                "确定");
+            return current;
         }
 
         private void CreateScatterGroup()
@@ -1740,8 +1842,8 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 if (prefabs[i] == null) prefabs[i] = new PropPrefabEntry();
                 EditorGUILayout.BeginHorizontal();
-                prefabs[i].prefab = (GameObject)EditorGUILayout.ObjectField(
-                    $"Prefab[{i}]", prefabs[i].prefab, typeof(GameObject), false);
+                prefabs[i].prefab = DrawProcessedCandidatePrefabField(
+                    $"Prefab[{i}]", prefabs[i].prefab);
                 GUILayout.Label("权重", GUILayout.Width(32f));
                 prefabs[i].weight = Mathf.Max(0,
                     EditorGUILayout.IntField(prefabs[i].weight, GUILayout.Width(48f)));
@@ -1868,8 +1970,7 @@ namespace AiTerrainWorkflow.LayerEditor
             if (_fixedPointFoldouts[index])
             {
                 group.markerColor = EditorGUILayout.ColorField("标识颜色", group.markerColor);
-                group.prefab = (GameObject)EditorGUILayout.ObjectField(
-                    "预制体", group.prefab, typeof(GameObject), false);
+                group.prefab = DrawProcessedCandidatePrefabField("预制体", group.prefab);
                 group.rotationDegrees = Mathf.Clamp(
                     EditorGUILayout.FloatField("旋转（度）", group.rotationDegrees), 0f, 360f);
                 group.scale = Mathf.Max(0f, EditorGUILayout.FloatField("缩放", group.scale));

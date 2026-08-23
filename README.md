@@ -529,6 +529,16 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - `Tools / Terrain Edit Workflow / Open Terrain Paint Workflow`：打开工作流窗口。
 - 窗口八个子界面按流程排列：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 散布编辑 / 摆件编辑 / 定点编辑 / 应用。散布编辑按生成组配置；应用页选择目标 Terrain 与连续应用阶段。
 
+## 备用预制体与文件隔离规范
+
+- 散布、摆件、定点三个摆放模块只能引用经 `PrefabProcessingUtility.BuildCandidatePrefab` 处理的备用 Prefab，不能直接引用原始素材 Prefab。
+- 备用 Prefab 必须位于 `Assets/ai-unity-terrain-edit-workflow/` 内，根节点必须挂有 `PrefabStructureInfo`，且根 Transform 必须为 position `(0,0,0)`、rotation identity、scale `(1,1,1)`。
+- 备用 Prefab 使用空的标准根节点包装原始 Prefab；原始素材只作为嵌套 Prefab 被引用，工具不会修改原始 Prefab。
+- 工具产生的主配置、生成组、MapData、备用 Prefab 和 Billboard 全部保存在 `Assets/ai-unity-terrain-edit-workflow/` 内。删除该工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
+- 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo` 或根 Transform 未归一化都会阻止应用，并显示具体生成组和资源路径。
+- LOD/Billboard 组件完整性检查已预留独立校验入口；待 LOD 层级及 Billboard Renderer 规则确定后启用，当前不会阻断应用。
+- 应用页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds。
+
 ## 与 unity-python-bridge 的关系 [按需]
 
 - bridge **不参与主链路**，只做按需外围：`mesh.bounds --placed`（量素材尺寸写 ModelFeatures）、`prefab.screenshot`（缩略图）、`terrain.*`（直接读写真实 TerrainData 的命令行通道，共 19 条）。

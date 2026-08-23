@@ -16,6 +16,43 @@ namespace AiTerrainWorkflow.Editor
         public const string BillboardOutputDirectory =
             "Assets/ai-unity-terrain-edit-workflow/Billboards";
 
+        /// <summary>判断 Prefab 是否为可供工作流三个摆放模块引用的已处理备用 Prefab。</summary>
+        public static bool IsProcessedCandidatePrefab(GameObject prefab, out string reason)
+        {
+            if (prefab == null)
+            {
+                reason = "Prefab 为空";
+                return false;
+            }
+
+            string path = AssetDatabase.GetAssetPath(prefab).Replace('\\', '/');
+            if (string.IsNullOrEmpty(path) ||
+                !path.StartsWith(WorkflowRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "Prefab 不在工具目录内，请先通过“批量添加备用预制体”处理";
+                return false;
+            }
+
+            if (prefab.GetComponent<PrefabStructureInfo>() == null)
+            {
+                reason = "根节点缺少 PrefabStructureInfo";
+                return false;
+            }
+
+            Transform root = prefab.transform;
+            if (root.localPosition.sqrMagnitude > 0.00000001f ||
+                Quaternion.Angle(root.localRotation, Quaternion.identity) > 0.0001f ||
+                (root.localScale - Vector3.one).sqrMagnitude > 0.00000001f)
+            {
+                reason = $"根 Transform 未归一化：position={root.localPosition}, " +
+                         $"rotation={root.localEulerAngles}, scale={root.localScale}";
+                return false;
+            }
+
+            reason = null;
+            return true;
+        }
+
         /// <summary>
         /// 在工作流根目录创建同名包装 Prefab：空根节点 + 原 Prefab 的嵌套实例，
         /// 然后写入/更新根节点上的 PrefabStructureInfo。
