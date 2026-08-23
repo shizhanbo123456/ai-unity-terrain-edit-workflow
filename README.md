@@ -63,7 +63,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
   - 每个物体一个预制体；**通常只含该物体**，**根节点 transform / rotation 始终为默认值**（位置 0、旋转默认、缩放 1）——放置时直接操作根节点，无需任何换算；
   - **[特例]** 少数场景**允许多个子物体拼成一个 prefab**（如水晶 + 底座拼成防御塔）：此时子物体可带自身变换，但**根节点仍须零变换**；放置时仍只操作根节点，无需任何换算。
   - 每个预制体挂载一个**信息组件 `PropInfo`**：描述尺寸（Renderer.bounds 自动采集）、类别、朝向约束等，供生成逻辑与代码阅读统一识别。
-- **[待开发]** 生成组（GenerationGroup）与摆件池：复用 `ObjectGroup`（groupName + GameObject 列表）与 `UniformPointGenerator`。
+- 摆件生成组使用独立的 `PropConfigSO`，不再复用简单对象列表容器。
 - **[待设计]** bridge 按需测量：`mesh.bounds --placed` 量取素材尺寸写回 `ModelFeatures.md`；`prefab.screenshot` 生成缩略图供窗口显示。
 
 ### 阶段 1 · 区域编辑 [已完成]
@@ -180,7 +180,6 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 ```
 Utils/
 ├── UniformPointGenerator.cs    [已完成] 均匀分布随机点（网格抖动 Jittered Grid，确定性种子可复现）
-├── ObjectGroup.cs              [已完成] 摆件组 SO（groupName + GameObject 列表，供摆件编辑复用）
 └── ChunkUpdateManager.cs       [已完成] 区块更新管理器（激活/失活区块集合，MoveTo 驱动；供 TerrainBuilder 分组流式生成）
 
 LayerEditor/
