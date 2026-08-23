@@ -21,7 +21,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 | 名词 | 含义 |
 |---|---|
-| 工作流项目 | `TerrainGeneratorConfigs` 目录下的一个文件夹；一个文件夹 = 一套完整的地形工作流配置（含主配置 SO + 各层级 SO + MapData）。 |
+| 工作流项目 | Unity 项目 `Assets/TerrainGeneratorConfigs` 目录下的一个文件夹；一个文件夹 = 一套完整的地形生成元数据（含主配置 SO + 各层级 SO + 生成组 SO + MapData）。 |
 | 主配置 | `TerrainPaintProjectSO`（ScriptableObject）：地形工作流的总配置，聚合素材池 / 规则 / 邻接组 / mapResolution / MapData 接口，是编辑器窗口与 `TerrainBuilder` 的单一数据入口。 |
 | 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的配置（颜色 / 名称 / 权重 / 高度范围 / 道路参数 / 最小离路距离 / 构建时参数：密度、scale）；数量 2~16，从属于主配置。 |
 | 生成组 | `GenerationGroup`：主配置中的一组摆件生成规则（失败尝试次数上限 / 预期密度 / 生成规模(Vector2Int) / 目标layer(FLAGS) / 越界宽容(float) / 排列依据-距离场 / 排列位置-值域 / 旋转 enum / 分布形式 enum / 分布间距 float(可<0)；组内每个 prefab 另有 权重 + 数量下限），对应一类物件的摆放规则（见阶段 4）。**不采用坡度限制**；**防重叠（最小间距）延至构建期按实际地形尺寸处理**。 |
@@ -483,7 +483,7 @@ function WorkflowConfig.DrawMapDataPreview():
 
 - 生命周期：编辑器中计算的 MapData 通过 `WriteMap` 长期保存；Player 中新计算的 MapData 只写入当次 `TerrainBuilder.MapData`（`TerrainMapData`），不写磁盘、不修改配置资产。
 - 接口（主配置 `TerrainPaintProjectSO` 上）：`ReadMap(key)→float[][]` / `WriteMap(key, float[][])` / `DeleteMap(key)` / `HasMap(key)`。
-- 文件：`Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs/<配置>/MapData/{key}.txt`。
+- 文件：`Assets/TerrainGeneratorConfigs/<配置>/MapData/{key}.txt`。
 - 格式：CSV，手写解析（无第三方库）。首行元数据头 `#key=...;w=...;h=...`（解析器跳过 `#` 行）；数值 **F3 三位小数**、InvariantCulture（跨平台一致）。
 - 引用：主配置持 `mapDataFiles`（`key + TextAsset`），随 SO 打进构建；**编辑器读直接读磁盘文件（保最新）**，**运行时走 TextAsset**。
 - 辅助：`MapDataTextureUtils`（float[][]↔Texture2D，仅编辑期显示/采集）。
@@ -517,8 +517,20 @@ LayerEditor/
 Editor/
 └── TerrainEditWorkflowMenu.cs  [已完成] 菜单入口（Tools / Terrain Edit Workflow）
 
-TerrainGeneratorConfigs/        [暂留空] 本地配置资产（gitignored；每个配置一个子文件夹 + MapData/）
 ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用 bridge `mesh-bounds --placed` 量取）
+```
+
+工具代码之外的 Unity 项目数据目录：
+
+```text
+Assets/TerrainGeneratorConfigs/
+└── <ProjectName>/
+    ├── <ProjectName>.asset       主配置 TerrainPaintProjectSO
+    ├── Layer_00.asset ...       语义层配置
+    ├── ScatterConfig/           散布生成组
+    ├── PropConfig/              摆件生成组
+    ├── FixedPointConfig/        定点生成组
+    └── MapData/                编辑器持久化的栅格数据
 ```
 
 ## 菜单与窗口 [已完成]

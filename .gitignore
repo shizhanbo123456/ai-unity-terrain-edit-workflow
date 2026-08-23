@@ -1,5 +1,2 @@
-# LayerEditor 配置资产（不纳入版本控制）
-# 每个地形配置 = TerrainGeneratorConfigs/ 下一个子文件夹（总 SO + 层级 SO + 层次图），
-# 全部为本地项目数据，不进版本库；.meta 一并忽略。
-LayerEditor/TerrainGeneratorConfigs/
-LayerEditor/TerrainGeneratorConfigs.meta
+# 工具仓库只保存代码。地形生成元数据位于 Unity 项目的
+# Assets/TerrainGeneratorConfigs/，不在本嵌套仓库的路径范围内。

@@ -43,7 +43,8 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
-        public const string ConfigRootDirRelative =
+        public const string ConfigRootDirRelative = "Assets/TerrainGeneratorConfigs";
+        private const string LegacyConfigRootDirRelative =
             "Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
 
         private const string PrefsLastProject = "AiTerrainWorkflow.LastPaintProject";
@@ -145,6 +146,11 @@ namespace AiTerrainWorkflow.LayerEditor
         private void OnEnable()
         {
             string path = EditorPrefs.GetString(PrefsLastProject, "");
+            if (path.StartsWith(LegacyConfigRootDirRelative + "/"))
+            {
+                path = ConfigRootDirRelative + path.Substring(LegacyConfigRootDirRelative.Length);
+                EditorPrefs.SetString(PrefsLastProject, path);
+            }
             if (!string.IsNullOrEmpty(path))
                 _project = AssetDatabase.LoadAssetAtPath<TerrainPaintProjectSO>(path);
             if (_project != null)
