@@ -100,16 +100,16 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            float[][] height = MapData.Get("height");
-            if (!HasMapSize(height, mapW, mapH))
-            {
-                int[] layerIds = FlattenLayerIds(layerMap, mapW, mapH);
-                height = TerrainRoadGen.BakeHeightData(_config, layerIds, mapW, mapH);
-                if (height == null) return;
-                MapData.Set("height", height);
-            }
-
             TerrainData terrainData = _terrain.terrainData;
+            var pixelWorldSize = new Vector2(
+                terrainData.size.x / Mathf.Max(1, mapW - 1),
+                terrainData.size.z / Mathf.Max(1, mapH - 1));
+            int[] layerIds = FlattenLayerIds(layerMap, mapW, mapH);
+            float[][] height = TerrainRoadGen.BakeHeightData(
+                _config, layerIds, mapW, mapH, pixelWorldSize);
+            if (height == null) return;
+            MapData.Set("height", height);
+
             int resolution = terrainData.heightmapResolution;
             var normalized = new float[resolution, resolution];
             float terrainHeight = Mathf.Max(0.0001f, terrainData.size.y);
@@ -502,19 +502,19 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private void EnsureRoadMapData(float[][] layerMap, int mapW, int mapH)
         {
-            if (HasMapSize(MapData.Get("distance"), mapW, mapH) &&
-                HasMapSize(MapData.Get("occupancy"), mapW, mapH) &&
-                HasMapSize(MapData.Get("road"), mapW, mapH) &&
-                HasMapSize(MapData.Get("offRoad"), mapW, mapH))
-                return;
             if (_config.FindDuplicateLayerIndices().Count > 0)
             {
                 Debug.LogError("[TerrainBuilder] 邻接组存在重复 Layer，无法生成道路数据。");
                 return;
             }
             int[] ids = FlattenLayerIds(layerMap, mapW, mapH);
+            Vector3 terrainSize = _terrain.terrainData.size;
+            var pixelWorldSize = new Vector2(
+                terrainSize.x / Mathf.Max(1, mapW - 1),
+                terrainSize.z / Mathf.Max(1, mapH - 1));
             Texture2D preview = TerrainRoadGen.ComputeAll(
-                _config, ids, mapW, mapH, out var distance, out var occupancy, out var road);
+                _config, ids, mapW, mapH, pixelWorldSize,
+                out var distance, out var occupancy, out var road);
             if (preview == null) return;
             if (Application.isPlaying) Destroy(preview);
             else DestroyImmediate(preview);
@@ -522,7 +522,7 @@ namespace AiTerrainWorkflow.LayerEditor
             MapData.Set("occupancy", CsvArrayCodec.ToJagged(occupancy, mapW, mapH));
             MapData.Set("road", CsvArrayCodec.ToJagged(road, mapW, mapH));
             MapData.Set("offRoad", CsvArrayCodec.ToJagged(
-                TerrainRoadGen.ComputeOffRoad(ids, road, mapW, mapH, _config.config.worldPerPixel), mapW, mapH));
+                TerrainRoadGen.ComputeOffRoad(ids, road, mapW, mapH, pixelWorldSize), mapW, mapH));
         }
 
         private List<TerrainLayer> BuildTerrainLayerUnion()

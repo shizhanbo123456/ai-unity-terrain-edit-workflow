@@ -1052,7 +1052,8 @@ namespace AiTerrainWorkflow.LayerEditor
             cfg.maxStepsPerPath = Mathf.Max(1, EditorGUILayout.IntField("Max Steps Per Path", cfg.maxStepsPerPath));
             cfg.gApplySpacing = Mathf.Max(0.01f, EditorGUILayout.FloatField("G Apply Spacing / 防卷曲 (m)", cfg.gApplySpacing));
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
-            cfg.worldPerPixel = Mathf.Max(0.001f, EditorGUILayout.FloatField("World Per Pixel (m/px)", cfg.worldPerPixel));
+            cfg.worldPerPixel = Mathf.Max(0.001f,
+                EditorGUILayout.FloatField("预览比例 (m/px)", cfg.worldPerPixel));
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("全局贴图种子（value-noise）", EditorStyles.boldLabel);

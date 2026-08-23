@@ -116,7 +116,8 @@ function CalculateHeightMap(project, layerMap):
     for each pixel p:
         layerIndex = round(layerMap[p])
         layer = project.layers[layerIndex]
-        noise = DeterministicNoise(p, project.heightSeed, project.heightScale)
+        worldXZ = p * PixelWorldSize(terrain, mapSize)
+        noise = DeterministicNoise(worldXZ, project.heightSeed, project.heightScale)
         height[p] = lerp(layer.heightRange.x, layer.heightRange.y, noise)
 
     if project.smoothIterations > 0:
@@ -165,7 +166,7 @@ function CalculateRoadMapData(project, layerMap):
         merge groupRoad into road
 
     offRoad = TerrainRoadGen.ComputeOffRoad(
-        layerIds, road, project.config.worldPerPixel)
+        layerIds, road, PixelWorldSize(terrain, mapSize))
     return distance, occupancy, road, offRoad
 
 function EnsureRoadMapData(session):
@@ -336,9 +337,9 @@ function WorkflowConfig.DrawMapDataPreview():
 - **像素中心对齐 Terrain 边界**：首个像素中心（数组索引 `(0,0)`）对应 Terrain 局部坐标 `(0,0)`，末个像素中心（数组索引 `(width-1,height-1)`）对应 Terrain 局部坐标 `(terrainSize.x,terrainSize.z)`。口头所称 128×128 工作流的 `(128,128)` 表示其右上边界；实际数组末像素索引为 `(127,127)`。
 - **正向映射**：`localX = pixelX / (width - 1) * terrainSize.x`，`localZ = pixelZ / (height - 1) * terrainSize.z`；世界坐标还需加上 `terrain.transform.position`。反向映射为 `pixelX = localX / terrainSize.x * (width - 1)`、`pixelZ = localZ / terrainSize.z * (height - 1)`。
 - **边缘外扩半像素**：由于首末像素的中心落在 Terrain 两侧边界，像素图的实际覆盖范围会在 Terrain 四周各超出半个像素间距。这样 Terrain 边缘仍由完整的最外圈像素覆盖，可避免边缘权重、掩码或插值表现异常。反向采样时，离散数据（如 `layerMap` / `road`）取最近像素，连续数据（如 `height` / `distance` / `offRoad`）使用双线性插值；超出范围的采样钳制到最外圈像素。
-- **单位约定**：提到距离为 **（整数 / 像素）** 时，指它们在 map 上（或映射到 map 上）的距离；提到距离为 **（float / 米）** 时，指它们在 terrain 上（或映射到 terrain 上）的距离。给定 Terrain 后，像素中心间距分别为 `worldPerPixelX = terrainSize.x / (width - 1)`、`worldPerPixelZ = terrainSize.z / (height - 1)`；非正方形 Terrain 必须保留 X/Z 两个比例。现有 `TerrainPaintConfig.worldPerPixel` 是单值距离换算参数，使用时应遵守上述中心间距语义，后续构建端需按实际 Terrain 尺寸计算两轴比例。
+- **单位约定**：只有区域编辑的操作点和画笔半径使用像素。其余距离参数与距离结果统一使用世界单位。给定 Terrain 后，像素中心间距分别为 `worldPerPixelX = terrainSize.x / (width - 1)`、`worldPerPixelZ = terrainSize.z / (height - 1)`；带两轴系数的欧氏距离变换直接输出世界距离。`TerrainPaintConfig.worldPerPixel` 仅用于编辑器尚未选择目标 Terrain 时的等比例预览，实际 Build 不使用该值。
 - **示例**：128×128 的 map 映射到 1024×1024 的 Terrain 时，索引 `0` 的像素中心对应局部坐标 `0`，索引 `127` 的像素中心对应 `1024`；相邻中心间距为 `1024 / 127 ≈ 8.063m`，单轴实际覆盖约为 `[-4.0315, 1028.0315]`。
-- 例：`distance`（R 通道）为像素距离（map 上）；`offRoad` 与 `ScatterConfigSO.offRoadDistanceRange` 为米（Terrain 上）。
+- 例：`distance`、`offRoad`、道路宽度/间距、散布离路范围和摆件间距全部是世界单位。
 
 ## 完整工作流
 
@@ -382,15 +383,15 @@ function WorkflowConfig.DrawMapDataPreview():
 
 ### 阶段 2 · 高度编辑 [已完成]
 
-- 逐像素按所在层的 `heightRange`，用 Perlin 噪声（`heightSeed` + `heightScale` 频率）插值生成**真实高度**。
+- 逐点按所在层的 `heightRange`，用像素中心对应的世界 X/Z 坐标采样 Perlin 噪声（`heightSeed` + 世界空间 `heightScale` 频率），插值生成**真实高度**；Build 会按目标 Terrain 实际尺寸重算。
 - 真实高度直接写入 `MapData/height.txt`（float[][]，**不归一化**）；**范围不持久化**，由显示 / 构建时遍历数据现算（`ToTexture` 统计后以 `out` 传出）。
 - 预览图由窗口用 `MapDataTextureUtils.ToTexture` 生成，**不落盘**。
 - 平滑参数（`smoothStep` 步长 / `smoothIterations` 迭代，十字线均值滤波）已加入配置与窗口，**暂未参与运算**，后续接入 `BakeHeightData`。
 
 ### 阶段 3 · 贴图编辑 [已完成]
 
-- 链路：`ParseLayerIds`（色→层ID）→ `GroupLayers`（邻接组，冲突阻断）→ `ComputeR`（Felzenszwalb 欧氏距离场，输出**像素距离真实值**）→ `GenerateRoads`（随机游走，G=占用/间隔缓冲，B=路面硬掩码）→ `ComputeOffRoad`（语义层拼合区域内到最近道路的距离，**米**）。
-- 结果写入四个 MapData key：`distance`（R，**像素距离真实值**）/ `occupancy`（G）/ `road`（B）/ `offRoad`（**米**：语义层区域（不含 Layer0）内到最近道路的距离，道路处=0、区域外=0）。**范围不持久化**：预览 RGB 图的 R 通道由数据现算 max 归一化，构建时同样现算。
+- 链路：`ParseLayerIds`（色→层ID）→ `GroupLayers`（邻接组，冲突阻断）→ `ComputeR`（带 X/Z 世界间距的 Felzenszwalb 欧氏距离场）→ `GenerateRoads`（世界距离参数换算到栅格，G=占用/间隔缓冲，B=路面硬掩码）→ `ComputeOffRoad`（语义层拼合区域内到最近道路的世界距离）。
+- 结果写入四个 MapData key：`distance`（R，世界距离）/ `occupancy`（G）/ `road`（B）/ `offRoad`（世界距离：语义层区域（不含 Layer0）内到最近道路的距离，道路处=0、区域外=0）。Build 时按目标 Terrain 的实际像素中心间距在内存中重算，避免预览比例污染最终结果。
 - **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。
 
 ### 阶段 5 · 摆件编辑 [进行中]（配置界面已完成，放置算法待开发）

@@ -33,7 +33,7 @@ namespace AiTerrainWorkflow.LayerEditor
         public float noiseScale = 1f;
 
         [Header("坐标换算")]
-        [Tooltip("像素 ↔ 世界换算（= Terrain 世界尺寸 / 图片分辨率）；世界距离参数（roadStep/roadWidth 等）除以它转成像素")]
+        [Tooltip("仅用于编辑器无目标 Terrain 时的道路预览比例（米/像素）；实际 Build 会由目标 Terrain 尺寸与 Map 分辨率计算 X/Z 两轴比例")]
         public float worldPerPixel = 0.4f;
     }
 
@@ -75,7 +75,7 @@ namespace AiTerrainWorkflow.LayerEditor
         [Header("高度编辑")]
         [Tooltip("烘焙高度图用的噪声种子")]
         public int heightSeed = 0;
-        [Tooltip("烘焙高度图用的噪声空间频率（越大噪声变化越快）")]
+        [Tooltip("烘焙高度图用的世界空间噪声频率（越大噪声变化越快）")]
         public float heightScale = 1f;
 
         /// <summary>

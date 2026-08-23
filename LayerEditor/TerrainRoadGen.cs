@@ -86,12 +86,21 @@ namespace AiTerrainWorkflow.LayerEditor
         // ---------- 距离场（二值欧氏距离变换） ----------
 
         /// <summary>
-        /// 计算组合层级的 R 通道：区域内像素到最近区域边界（组外像素）的欧氏距离（像素单位，**真实值不归一化**；
-        /// 边界=0，最深内陆=最大值）；区域外 R=0。maxD = 组内最大距离（真实值）。
+        /// 计算组合层级的 R 通道。无 pixelWorldSize 的兼容重载以 1×1 世界单位像素计算；
+        /// 构建端应使用 Vector2 重载，得到区域内到最近边界的世界空间欧氏距离。
         /// </summary>
         public static float[] ComputeR(int[] layerIds, int w, int h, List<int> group, out float maxD)
         {
-            const float Big = 1e7f; // 前景（区域内）的初始值，远大于任何像素距离平方
+            return ComputeR(layerIds, w, h, group, Vector2.one, out maxD);
+        }
+
+        /// <summary>按像素中心在世界 X/Z 的实际间距计算世界空间欧氏距离场。</summary>
+        public static float[] ComputeR(
+            int[] layerIds, int w, int h, List<int> group, Vector2 pixelWorldSize, out float maxD)
+        {
+            const float Big = 1e20f;
+            float spacingX = Mathf.Max(0.0001f, pixelWorldSize.x);
+            float spacingZ = Mathf.Max(0.0001f, pixelWorldSize.y);
             var frow = new float[w];
             var tmp = new float[w * h];
 
@@ -101,7 +110,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 int baseIdx = y * w;
                 for (int x = 0; x < w; x++)
                     frow[x] = InGroup(layerIds[baseIdx + x], group) ? Big : 0f;
-                var gx = Edt1D(frow);
+                var gx = Edt1D(frow, spacingX);
                 for (int x = 0; x < w; x++)
                     tmp[baseIdx + x] = gx[x];
             }
@@ -114,7 +123,7 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 for (int y = 0; y < h; y++)
                     fcol[y] = tmp[y * w + x];
-                var gy = Edt1D(fcol);
+                var gy = Edt1D(fcol, spacingZ);
                 for (int y = 0; y < h; y++)
                 {
                     float d = Mathf.Sqrt(Mathf.Max(0f, gy[y]));
@@ -136,13 +145,21 @@ namespace AiTerrainWorkflow.LayerEditor
 
         /// <summary>
         /// 计算 offRoad 距离场：语义层（层 ID ≥1，排除 -1 透明与 Layer0）拼合区域内，
-        /// 非道路像素到最近道路像素的欧氏距离（像素 → × worldPerPixel 转**米**）；道路像素=0，拼合区域外=0。
+        /// 非道路像素到最近道路像素的世界空间欧氏距离；道路像素=0，拼合区域外=0。
         /// 散布生成时按生成组的 offRoadDistanceRange 过滤。
         /// </summary>
         public static float[] ComputeOffRoad(int[] layerIds, float[] road, int w, int h, float worldPerPixel)
         {
-            const float Big = 1e7f; // 前景（非道路）初始值，远大于任何像素距离平方
-            float m = worldPerPixel > 0f ? worldPerPixel : 1f;
+            float spacing = worldPerPixel > 0f ? worldPerPixel : 1f;
+            return ComputeOffRoad(layerIds, road, w, h, new Vector2(spacing, spacing));
+        }
+
+        public static float[] ComputeOffRoad(
+            int[] layerIds, float[] road, int w, int h, Vector2 pixelWorldSize)
+        {
+            const float Big = 1e20f;
+            float spacingX = Mathf.Max(0.0001f, pixelWorldSize.x);
+            float spacingZ = Mathf.Max(0.0001f, pixelWorldSize.y);
             var frow = new float[w];
             var tmp = new float[w * h];
 
@@ -152,7 +169,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 int baseIdx = y * w;
                 for (int x = 0; x < w; x++)
                     frow[x] = road[baseIdx + x] > 0.5f ? 0f : Big;
-                var gx = Edt1D(frow);
+                var gx = Edt1D(frow, spacingX);
                 for (int x = 0; x < w; x++)
                     tmp[baseIdx + x] = gx[x];
             }
@@ -164,14 +181,14 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 for (int y = 0; y < h; y++)
                     fcol[y] = tmp[y * w + x];
-                var gy = Edt1D(fcol);
+                var gy = Edt1D(fcol, spacingZ);
                 for (int y = 0; y < h; y++)
                 {
                     int idx = y * w + x;
                     if (layerIds[idx] > 0) // 语义层（不包含 Layer0 / 透明 -1）
                     {
                         float d = Mathf.Sqrt(Mathf.Max(0f, gy[y]));
-                        off[idx] = d * m;
+                        off[idx] = d;
                     }
                     else
                     {
@@ -183,9 +200,10 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>1D 平方距离变换（Felzenszwalb & Huttenlocher O(n)）。f[i]=0 为背景，大值代表前景。</summary>
-        private static float[] Edt1D(float[] f)
+        private static float[] Edt1D(float[] f, float sampleSpacing = 1f)
         {
             int n = f.Length;
+            float coefficient = sampleSpacing * sampleSpacing;
             var d = new float[n];
             var v = new int[n];
             var z = new float[n + 1];
@@ -195,11 +213,15 @@ namespace AiTerrainWorkflow.LayerEditor
             z[1] = float.PositiveInfinity;
             for (int q = 1; q < n; q++)
             {
-                float s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+                float s = ((f[q] + coefficient * q * q) -
+                           (f[v[k]] + coefficient * v[k] * v[k])) /
+                          (2f * coefficient * (q - v[k]));
                 while (s <= z[k])
                 {
                     k--;
-                    s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+                    s = ((f[q] + coefficient * q * q) -
+                         (f[v[k]] + coefficient * v[k] * v[k])) /
+                        (2f * coefficient * (q - v[k]));
                 }
                 k++;
                 v[k] = q;
@@ -212,7 +234,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 while (z[k + 1] < q)
                     k++;
                 float dv = q - v[k];
-                d[q] = dv * dv + f[v[k]];
+                d[q] = coefficient * dv * dv + f[v[k]];
             }
             return d;
         }
@@ -227,13 +249,22 @@ namespace AiTerrainWorkflow.LayerEditor
             TerrainPaintConfig cfg, List<LayerConfigSO> layers, float worldPerPixel,
             out float[] g, out float[] b)
         {
+            GenerateRoads(layerIds, r, w, h, group, cfg, layers,
+                new Vector2(worldPerPixel, worldPerPixel), out g, out b);
+        }
+
+        public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
+            TerrainPaintConfig cfg, List<LayerConfigSO> layers, Vector2 pixelWorldSize,
+            out float[] g, out float[] b)
+        {
             g = new float[w * h];
             b = new float[w * h];
             var rng = new System.Random(cfg.walkSeed);
 
-            float stepPx = Mathf.Max(1f, cfg.roadStep / worldPerPixel);
-            float spacingPx = Mathf.Max(1f, cfg.gApplySpacing / worldPerPixel);
-            int candRadiusPx = Mathf.Max(1, Mathf.RoundToInt(stepPx));
+            pixelWorldSize.x = Mathf.Max(0.0001f, pixelWorldSize.x);
+            pixelWorldSize.y = Mathf.Max(0.0001f, pixelWorldSize.y);
+            float stepWorld = Mathf.Max(Mathf.Min(pixelWorldSize.x, pixelWorldSize.y), cfg.roadStep);
+            float spacingWorld = Mathf.Max(Mathf.Min(pixelWorldSize.x, pixelWorldSize.y), cfg.gApplySpacing);
 
             var allPoints = new List<Vector2Int>();
 
@@ -242,11 +273,11 @@ namespace AiTerrainWorkflow.LayerEditor
                 var start = FindStart(layerIds, r, w, h, group, cfg, rng, g);
                 if (start == null)
                     break;
-                if (CoverageStop(start.Value, w, h, cfg, rng, stepPx, g))
+                if (CoverageStop(start.Value, w, h, cfg, rng, stepWorld, pixelWorldSize, g))
                     break;
 
                 var path = WalkPath(start.Value, layerIds, r, w, h, group, cfg, layers,
-                    worldPerPixel, stepPx, spacingPx, candRadiusPx, rng, g);
+                    pixelWorldSize, stepWorld, spacingWorld, rng, g);
 
                 if (path.Count > 0)
                 {
@@ -255,7 +286,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     Vector2Int? join = null;
                     foreach (var p in allPoints)
                     {
-                        if (Dist(p, last) < stepPx * 2f)
+                        if (DistWorld(p, last, pixelWorldSize) < stepWorld * 2f)
                         {
                             join = p;
                             break;
@@ -266,7 +297,7 @@ namespace AiTerrainWorkflow.LayerEditor
                         path.Add(join.Value);
                         // 连接段 G 按防卷曲规则补画（沿途各点所在层的 roadSpacingMin）
                         StampLineFloat(g, w, h, last, join.Value,
-                            idx => GRadiusAt(layerIds, layers, worldPerPixel, idx, spacingPx), 1f);
+                            idx => GRadiusAt(layerIds, layers, idx, spacingWorld), pixelWorldSize, 1f);
                     }
 
                     // B：路径所有边统一画胶囊（半径 = 边所在层 roadWidth）
@@ -275,7 +306,7 @@ namespace AiTerrainWorkflow.LayerEditor
                         var a = path[i];
                         var c = path[i + 1];
                         StampLineFloat(b, w, h, a, c,
-                            idx => BRadiusAt(layerIds, layers, worldPerPixel, idx, stepPx), 1f);
+                            idx => BRadiusAt(layerIds, layers, idx, stepWorld), pixelWorldSize, 1f);
                     }
 
                     foreach (var p in path)
@@ -304,15 +335,16 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         private static bool CoverageStop(Vector2Int start, int w, int h,
-            TerrainPaintConfig cfg, System.Random rng, float radiusPx, float[] g)
+            TerrainPaintConfig cfg, System.Random rng, float radiusWorld, Vector2 pixelWorldSize, float[] g)
         {
             int n = Mathf.Max(1, cfg.startCoverStopSamples);
-            int radius = Mathf.Max(1, Mathf.RoundToInt(radiusPx));
             int occupied = 0;
             for (int i = 0; i < n; i++)
             {
-                int x = start.x + rng.Next(-radius, radius + 1);
-                int y = start.y + rng.Next(-radius, radius + 1);
+                double angle = rng.NextDouble() * Math.PI * 2.0;
+                double distance = Math.Sqrt(rng.NextDouble()) * radiusWorld;
+                int x = start.x + Mathf.RoundToInt((float)(Math.Cos(angle) * distance) / pixelWorldSize.x);
+                int y = start.y + Mathf.RoundToInt((float)(Math.Sin(angle) * distance) / pixelWorldSize.y);
                 if (x < 0 || x >= w || y < 0 || y >= h)
                     continue;
                 if (g[y * w + x] > 0.5f)
@@ -323,7 +355,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private static List<Vector2Int> WalkPath(Vector2Int start, int[] layerIds, float[] r,
             int w, int h, List<int> group, TerrainPaintConfig cfg, List<LayerConfigSO> layers,
-            float worldPerPixel, float stepPx, float spacingPx, int candRadiusPx,
+            Vector2 pixelWorldSize, float stepWorld, float spacingWorld,
             System.Random rng, float[] g)
         {
             var path = new List<Vector2Int> { start };
@@ -332,7 +364,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             for (int step = 0; step < cfg.maxStepsPerPath; step++)
             {
-                var cands = SampleCandidates(cur, w, h, cfg, candRadiusPx, rng);
+                var cands = SampleCandidates(cur, w, h, cfg, stepWorld, pixelWorldSize, rng);
                 var valid = new List<Vector2Int>();
                 foreach (var c in cands)
                 {
@@ -340,7 +372,8 @@ namespace AiTerrainWorkflow.LayerEditor
                     if (r[idx] <= 0.001f) continue;
                     if (!InGroup(layerIds[idx], group)) continue;
                     if (g[idx] > 0.5f) continue;
-                    if (Dist(c, cur) < stepPx - 0.5f) continue;
+                    if (DistWorld(c, cur, pixelWorldSize) < stepWorld -
+                        Mathf.Min(pixelWorldSize.x, pixelWorldSize.y) * 0.5f) continue;
                     valid.Add(c);
                 }
                 if (valid.Count == 0)
@@ -350,10 +383,10 @@ namespace AiTerrainWorkflow.LayerEditor
                 path.Add(next);
 
                 // G 应用：与锚点距离超过 gApplySpacing（防卷曲距离）才批量回填 G 胶囊
-                if (Dist(next, anchor) > spacingPx)
+                if (DistWorld(next, anchor, pixelWorldSize) > spacingWorld)
                 {
                     StampLineFloat(g, w, h, anchor, next,
-                        idx => GRadiusAt(layerIds, layers, worldPerPixel, idx, spacingPx), 1f);
+                        idx => GRadiusAt(layerIds, layers, idx, spacingWorld), pixelWorldSize, 1f);
                     anchor = next;
                 }
                 cur = next;
@@ -362,15 +395,15 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         private static List<Vector2Int> SampleCandidates(Vector2Int cur, int w, int h,
-            TerrainPaintConfig cfg, int candRadiusPx, System.Random rng)
+            TerrainPaintConfig cfg, float radiusWorld, Vector2 pixelWorldSize, System.Random rng)
         {
             var list = new List<Vector2Int>(cfg.walkCandidateCount);
             for (int i = 0; i < cfg.walkCandidateCount; i++)
             {
                 double ang = rng.NextDouble() * 2.0 * Math.PI;
-                double rad = Math.Sqrt(rng.NextDouble()) * candRadiusPx;
-                int x = cur.x + (int)Math.Round(Math.Cos(ang) * rad);
-                int y = cur.y + (int)Math.Round(Math.Sin(ang) * rad);
+                double rad = Math.Sqrt(rng.NextDouble()) * radiusWorld;
+                int x = cur.x + (int)Math.Round(Math.Cos(ang) * rad / pixelWorldSize.x);
+                int y = cur.y + (int)Math.Round(Math.Sin(ang) * rad / pixelWorldSize.y);
                 if (x >= 0 && x < w && y >= 0 && y < h)
                     list.Add(new Vector2Int(x, y));
             }
@@ -409,6 +442,22 @@ namespace AiTerrainWorkflow.LayerEditor
         public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds, int w, int h,
             out float[] rOut, out float[] gOut, out float[] bOut)
         {
+            float spacing = Mathf.Max(0.0001f, project.config.worldPerPixel);
+            return ComputeAll(project, layerIds, w, h, new Vector2(spacing, spacing),
+                out rOut, out gOut, out bOut);
+        }
+
+        /// <summary>使用 Terrain 推导的 X/Z 像素中心间距，输出世界单位距离场。</summary>
+        public static Texture2D ComputeAll(
+            TerrainPaintProjectSO project,
+            int[] layerIds,
+            int w,
+            int h,
+            Vector2 pixelWorldSize,
+            out float[] rOut,
+            out float[] gOut,
+            out float[] bOut)
+        {
             rOut = null;
             gOut = null;
             bOut = null;
@@ -431,12 +480,12 @@ namespace AiTerrainWorkflow.LayerEditor
             for (int gi = 0; gi < groups.Count; gi++)
             {
                 var group = groups[gi];
-                var rg = ComputeR(layerIds, w, h, group, out _);
+                var rg = ComputeR(layerIds, w, h, group, pixelWorldSize, out _);
                 for (int i = 0; i < r.Length; i++)
                     r[i] = Mathf.Max(r[i], rg[i]);
 
                 GenerateRoads(layerIds, rg, w, h, group, project.config, project.layers,
-                    project.config.worldPerPixel, out var gg, out var bb);
+                    pixelWorldSize, out var gg, out var bb);
                 for (int i = 0; i < g.Length; i++)
                 {
                     g[i] = Mathf.Max(g[i], gg[i]);
@@ -492,6 +541,15 @@ namespace AiTerrainWorkflow.LayerEditor
         /// </summary>
         public static float[][] BakeHeightData(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
         {
+            float previewSpacing = Mathf.Max(0.0001f, project.config.worldPerPixel);
+            return BakeHeightData(project, layerIds, w, h,
+                new Vector2(previewSpacing, previewSpacing));
+        }
+
+        /// <summary>使用像素中心的世界 X/Z 间距采样连续高度噪声。</summary>
+        public static float[][] BakeHeightData(
+            TerrainPaintProjectSO project, int[] layerIds, int w, int h, Vector2 pixelWorldSize)
+        {
             if (layerIds == null || layerIds.Length != w * h)
             {
                 Debug.LogError("[Terrain Road Gen] 烘焙高度图失败：layerIds 与尺寸不匹配");
@@ -500,6 +558,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             float scale = Mathf.Max(0.001f, project.heightScale);
             float seedOff = project.heightSeed * 13.37f;
+            float spacingX = Mathf.Max(0.0001f, pixelWorldSize.x);
+            float spacingZ = Mathf.Max(0.0001f, pixelWorldSize.y);
 
             var data = new float[h][];
 
@@ -515,7 +575,9 @@ namespace AiTerrainWorkflow.LayerEditor
                         : new Vector2(0f, 0f);
 
                     // Perlin 噪声（seed 偏移 + 空间频率 scale），在层级高度范围内插值（真实高度，不归一化）
-                    float n = Mathf.PerlinNoise(x * scale + seedOff, y * scale + seedOff);
+                    float n = Mathf.PerlinNoise(
+                        x * spacingX * scale + seedOff,
+                        y * spacingZ * scale + seedOff);
                     row[x] = Mathf.Lerp(range.x, range.y, n);
                 }
                 data[y] = row;
@@ -579,39 +641,40 @@ namespace AiTerrainWorkflow.LayerEditor
             return false;
         }
 
-        private static float Dist(Vector2Int a, Vector2Int b)
+        private static float DistWorld(Vector2Int a, Vector2Int b, Vector2 pixelWorldSize)
         {
-            float dx = a.x - b.x;
-            float dy = a.y - b.y;
+            float dx = (a.x - b.x) * pixelWorldSize.x;
+            float dy = (a.y - b.y) * pixelWorldSize.y;
             return Mathf.Sqrt(dx * dx + dy * dy);
         }
 
-        private static float GRadiusAt(int[] layerIds, List<LayerConfigSO> layers, float worldPerPixel, int idx, float fallback)
+        private static float GRadiusAt(int[] layerIds, List<LayerConfigSO> layers, int idx, float fallback)
         {
             int id = layerIds[idx];
             if (id < 0 || id >= layers.Count || layers[id] == null)
                 return fallback;
-            return Mathf.Max(1f, layers[id].roadSpacingMin / worldPerPixel);
+            return Mathf.Max(0f, layers[id].roadSpacingMin);
         }
 
-        private static float BRadiusAt(int[] layerIds, List<LayerConfigSO> layers, float worldPerPixel, int idx, float fallback)
+        private static float BRadiusAt(int[] layerIds, List<LayerConfigSO> layers, int idx, float fallback)
         {
             int id = layerIds[idx];
             if (id < 0 || id >= layers.Count || layers[id] == null)
                 return fallback;
-            return Mathf.Max(1f, layers[id].roadWidth / worldPerPixel);
+            return Mathf.Max(0f, layers[id].roadWidth);
         }
 
         /// <summary>沿线盖圆戳写入 float 缓冲（步长 1 像素，半径按沿途各点所在层取值）。</summary>
         private static void StampLineFloat(float[] buf, int w, int h, Vector2Int a, Vector2Int b,
-            Func<int, float> radiusAt, float value)
+            Func<int, float> radiusAt, Vector2 pixelWorldSize, float value)
         {
             float dx = b.x - a.x;
             float dy = b.y - a.y;
             float dist = Mathf.Sqrt(dx * dx + dy * dy);
             if (dist < 0.5f)
             {
-                StampCircleFloat(buf, w, h, a.x, a.y, radiusAt(a.y * w + a.x), value);
+                StampEllipseFloat(buf, w, h, a.x, a.y,
+                    radiusAt(a.y * w + a.x), pixelWorldSize, value);
                 return;
             }
             int steps = Mathf.Max(1, Mathf.CeilToInt(dist));
@@ -621,24 +684,27 @@ namespace AiTerrainWorkflow.LayerEditor
                 int x = Mathf.RoundToInt(a.x + dx * t);
                 int y = Mathf.RoundToInt(a.y + dy * t);
                 int idx = y * w + x;
-                StampCircleFloat(buf, w, h, x, y, radiusAt(idx), value);
+                StampEllipseFloat(buf, w, h, x, y, radiusAt(idx), pixelWorldSize, value);
             }
         }
 
-        private static void StampCircleFloat(float[] buf, int w, int h, int cx, int cy, float radius, float value)
+        private static void StampEllipseFloat(
+            float[] buf, int w, int h, int cx, int cy,
+            float radiusWorld, Vector2 pixelWorldSize, float value)
         {
-            int r = Mathf.CeilToInt(radius);
-            float r2 = radius * radius;
-            for (int y = cy - r; y <= cy + r; y++)
+            int radiusX = Mathf.CeilToInt(radiusWorld / pixelWorldSize.x);
+            int radiusZ = Mathf.CeilToInt(radiusWorld / pixelWorldSize.y);
+            float radiusSquared = radiusWorld * radiusWorld;
+            for (int y = cy - radiusZ; y <= cy + radiusZ; y++)
             {
                 if (y < 0 || y >= h) continue;
                 int rowBase = y * w;
-                for (int x = cx - r; x <= cx + r; x++)
+                for (int x = cx - radiusX; x <= cx + radiusX; x++)
                 {
                     if (x < 0 || x >= w) continue;
-                    float ddx = x - cx;
-                    float ddy = y - cy;
-                    if (ddx * ddx + ddy * ddy <= r2)
+                    float ddx = (x - cx) * pixelWorldSize.x;
+                    float ddy = (y - cy) * pixelWorldSize.y;
+                    if (ddx * ddx + ddy * ddy <= radiusSquared)
                         buf[rowBase + x] = value;
                 }
             }
