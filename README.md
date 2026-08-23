@@ -497,6 +497,7 @@ LayerEditor/
 ├── ScatterConfigSO.cs          [已完成] 单个散布生成组配置
 ├── PropConfigSO.cs             [已完成] 单个摆件生成组配置（实际放置待开发）
 ├── FixedPointConfigSO.cs       [已完成] 单个定点生成组配置（实际应用待开发）
+├── PrefabStructureInfo.cs      [已完成] 候选 Prefab 根节点结构信息（Billboard/两点高度适应标记 + 静态更新入口）
 ├── TerrainBuilder.cs           [进行中] 构建组件（分组散布已实现；高度/贴图/摆件/定点待实现）
 └── Editor/
     ├── LayerEditorWindow.cs    [已完成] 八阶段工作流窗口（散布生成组 + 最终应用页 + MapData 接线）
