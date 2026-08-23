@@ -597,7 +597,8 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.LabelField("备用预制体处理", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "批量创建和处理工作流目录下的备用预制体。创建时会为每个源 Prefab 生成标准 Transform 的同名包装 Prefab，" +
-                "并写入 PrefabStructureInfo。",
+                "并写入 PrefabStructureInfo。生成后可以编辑其子物体变换、增删子物体或拼合多个对象；再次处理不会覆盖这些内容。" +
+                "散布、摆件和定点只能引用 Generated/Prefabs 中的备用预制体，不能直接引用其它 Prefab。",
                 MessageType.Info);
 
             EditorGUILayout.Space(6);

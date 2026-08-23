@@ -41,7 +41,7 @@ namespace AiTerrainWorkflow.Editor
             if (string.IsNullOrEmpty(path) ||
                 !path.StartsWith(CandidatePrefabDirectory + "/", StringComparison.OrdinalIgnoreCase))
             {
-                reason = "Prefab 不在工具目录内，请先通过“批量添加备用预制体”处理";
+                reason = "只能引用 Generated/Prefabs 中生成的备用 Prefab，请先通过“批量添加备用预制体”处理";
                 return false;
             }
 
@@ -66,8 +66,9 @@ namespace AiTerrainWorkflow.Editor
         }
 
         /// <summary>
-        /// 在工作流根目录创建同名包装 Prefab：空根节点 + 原 Prefab 的嵌套实例，
-        /// 然后写入/更新根节点上的 PrefabStructureInfo。
+        /// 在 Generated/Prefabs 创建同名备用 Prefab：空标准根节点 + 原 Prefab 的嵌套实例。
+        /// 已存在的备用 Prefab 视为用户可编辑资产，只更新结构信息与可选 Billboard，绝不重建其内容；
+        /// 因而可以调整子物体位置/方向/缩放、增加或删除子物体并拼合多个对象。
         /// </summary>
         /// <param name="targetPrefab">Project 中作为内容来源的 .prefab 资产。</param>
         /// <param name="billboardMode">Billboard/LOD 使用方式。</param>
@@ -96,9 +97,6 @@ namespace AiTerrainWorkflow.Editor
             var existingCandidate = AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
             if (existingCandidate != null)
             {
-                if (!WrapsSourcePrefab(existingCandidate, sourcePath))
-                    throw new InvalidOperationException(
-                        "同名备用 Prefab 已存在，但它包装的不是当前源 Prefab: " + outputPath);
                 PrefabStructureInfo.UpdatePrefabStructure(
                     existingCandidate,
                     billboardMode,
@@ -144,16 +142,6 @@ namespace AiTerrainWorkflow.Editor
                 UpdateBillboard(outputPath, billboardMode);
 
             return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
-        }
-
-        private static bool WrapsSourcePrefab(GameObject candidate, string expectedSourcePath)
-        {
-            if (candidate == null || candidate.transform.childCount == 0)
-                return false;
-            var child = candidate.transform.GetChild(0).gameObject;
-            var source = PrefabUtility.GetCorrespondingObjectFromSource(child);
-            string actualPath = source != null ? AssetDatabase.GetAssetPath(source) : null;
-            return string.Equals(actualPath, expectedSourcePath, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

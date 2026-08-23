@@ -68,4 +68,6 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 
 - 使用 `run` 完成 Prefab 处理、烘焙、校验与可选 Terrain 构建；它已内置正确顺序。
 - 生成组引用应指向处理后的 `Generated/Prefabs` 资产。若同一个 manifest 同时声明 `prefabs` 和生成组引用，`run` 会先创建备用 Prefab 再解析引用。
+- `prefabs[].path` 是一次性的源素材输入；`scatterGroups`、`propGroups`、`fixedGroups` 中的实际引用只能指向 `Generated/Prefabs/`，不能直接引用源 Prefab 或其它目录的 Prefab。
+- 备用 Prefab 是允许人工维护的工作流资产：可以移动、旋转、缩放其子物体，也可以增删和拼合多个对象；只需保持根节点标准 Transform。再次运行同名处理不会覆盖这些内容，修改后可重新生成 Bounds/Billboard。
 - 命令会保存工作流自身的资产；不会改写源 Prefab。只有 manifest 的 `terrain` 非空时，`run` 才会修改场景 Terrain。

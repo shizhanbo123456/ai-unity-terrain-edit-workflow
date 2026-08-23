@@ -27,7 +27,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.4**（
 | 主配置 | `TerrainPaintProjectSO`（ScriptableObject）：地形工作流的总配置，聚合素材池 / 规则 / 邻接组 / mapResolution / MapData 接口，是编辑器窗口与 `TerrainBuilder` 的单一数据入口。 |
 | 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的颜色、名称、高度范围、道路参数与自然/道路 TerrainLayer 权重；数量 2~16，从属于主配置。 |
 | 生成组 | 散布、摆件和定点阶段各自的 ScriptableObject 规则资产：`ScatterConfigSO` / `PropConfigSO` / `FixedPointConfigSO`。 |
-| 物体库 | 统一存放所有可用场景物体的文件夹；**通常**每个物体一个单物体预制体（根节点零变换）+ `PropInfo` 信息组件（尺寸/类别/朝向约束等）。**特例**允许多个子物体拼成一个 prefab（如水晶 + 底座拼成防御塔），但**根节点必须始终为零变换**（位置 0 / 旋转默认 / 缩放 1）——放置时只操作根节点，无需任何换算。 |
+| 备用预制体库 | `Generated/Prefabs/` 中所有可被散布、摆件和定点模块引用的 Prefab。根节点为标准 Transform 并挂载 `PrefabStructureInfo`；其子物体可自由调整位置/方向/缩放，也可增删并拼合多个对象。 |
 
 ## 完整生成逻辑伪代码
 
@@ -353,7 +353,7 @@ function WorkflowConfig.DrawMapDataPreview():
 
 | 阶段 | 输入 | 处理 | 产出（载体） | 状态 |
 |---|---|---|---|---|
-| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 建素材池 + 物体库（**通常**单物体零变换 prefab，特例可多子物体拼、根节点仍零变换 + PropInfo）；bridge 量尺寸/截预览 | 素材池 + 物体库 + ModelFeatures | 池 **[已完成]**；物体库规范 **[已定]**；生成组/测量回流 **[待开发/待设计]** |
+| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 将源 Prefab 生成为工具内部备用 Prefab，再按需调整子物体、方向与组合，并更新 Bounds/Billboard | TerrainLayer 素材池 + `Generated/Prefabs` 备用库 | **[已完成]** |
 | 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
@@ -364,16 +364,15 @@ function WorkflowConfig.DrawMapDataPreview():
 
 ## 阶段详述
 
-### 阶段 0 · 素材准备 [池：已完成；物体库规范：已定；生成组/测量回流：待开发/待设计]
+### 阶段 0 · 素材准备 [已完成]
 
 - 主配置持有 `naturalTerrainLayers` 与 `roadTerrainLayers`；散布和摆件 Prefab 分别由各自生成组管理。
-- **物体库规范 [已定，2026-08-22]**（供阶段 4 摆件编辑使用）：
-  - 所有可用场景物体集中存放于 ai 工作流项目内**一个统一文件夹**；
-  - 每个物体一个预制体；**通常只含该物体**，**根节点 transform / rotation 始终为默认值**（位置 0、旋转默认、缩放 1）——放置时直接操作根节点，无需任何换算；
-  - **[特例]** 少数场景**允许多个子物体拼成一个 prefab**（如水晶 + 底座拼成防御塔）：此时子物体可带自身变换，但**根节点仍须零变换**；放置时仍只操作根节点，无需任何换算。
-  - 每个预制体挂载一个**信息组件 `PropInfo`**：描述尺寸（Renderer.bounds 自动采集）、类别、朝向约束等，供生成逻辑与代码阅读统一识别。
+- **备用预制体规范**（供散布、摆件、定点共同使用）：
+  - 三个摆放模块不得直接引用源 Prefab 或工具目录外的任何 Prefab，必须先生成到 `Generated/Prefabs/`。
+  - 备用 Prefab 根节点始终保持 position `(0,0,0)`、rotation identity、scale `(1,1,1)`，并挂载 `PrefabStructureInfo`。
+  - 根节点下的内容是可编辑的：允许调整子物体位置、方向、缩放，允许增加、删除子物体并拼合多个对象。
+  - 再次通过处理工具导入同名备用 Prefab时，只更新结构信息和 Billboard，不覆盖人工修改的内容。
 - 摆件生成组使用独立的 `PropConfigSO`，不再复用简单对象列表容器。
-- **[待设计]** bridge 按需测量：`mesh.bounds --placed` 量取素材尺寸写回 `ModelFeatures.md`；`prefab.screenshot` 生成缩略图供窗口显示。
 
 ### 阶段 1 · 区域编辑 [已完成]
 
@@ -404,9 +403,9 @@ function WorkflowConfig.DrawMapDataPreview():
 - `PropConfigSO` 承载每个生成组，资产保存在 `TerrainGeneratorConfigs/<项目>/PropConfig/`；主配置提供单一全局 `propSeed`。`TerrainBuilder.ApplyProps` 已实现确定性候选生成、三种分布、梯度旋转、Bounds 验收、间距和高度适应。
 
 **物体资源规范**（与阶段 0 一致）：
-- 所有可用场景物体集中在统一文件夹；**通常**每个物体一个 prefab、只含该物体，**根节点 transform/rotation 为默认值（零变换）**。
-- **[特例]** 允许多个子物体拼成单个 prefab（如水晶 + 底座 = 防御塔），但**根节点必须仍为零变换**，放置时只操作根节点。
-- 每个 prefab 挂载 `PropInfo` 信息组件：尺寸 / 类别 / 朝向约束等。
+- 生成组只能引用 `Generated/Prefabs/` 中由处理工具创建的备用 Prefab，不能直接引用其它 Prefab。
+- 备用 Prefab 根节点保持标准 Transform 并挂载 `PrefabStructureInfo`；子物体允许任意变换，也允许拼合多个对象。
+- 备用 Prefab 内容由用户维护；重复处理不会覆盖内容，Bounds 和 Billboard 可在修改后批量刷新。
 
 **摆件生成组（`PropConfigSO`）参数**：
 
@@ -510,7 +509,6 @@ Editor/
 ├── TerrainEditWorkflowMenu.cs  [已完成] 菜单入口（Tools / Terrain Edit Workflow）
 └── PrefabProcessingUtility.cs  [已完成] 构建候选包装 Prefab；批量更新 Billboard 与完整变换 Bounds
 
-ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用 bridge `mesh-bounds --placed` 量取）
 ```
 
 工具根目录下、与脚本目录并列的地形生成元数据目录：
@@ -535,15 +533,15 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 ## 备用预制体与文件隔离规范
 
 - 散布、摆件、定点三个摆放模块只能引用经 `PrefabProcessingUtility.BuildCandidatePrefab` 处理的备用 Prefab，不能直接引用原始素材 Prefab。
-- 备用 Prefab 必须位于 `Assets/ai-unity-terrain-edit-workflow/` 内，根节点必须挂有 `PrefabStructureInfo`，且根 Transform 必须为 position `(0,0,0)`、rotation identity、scale `(1,1,1)`。
-- 备用 Prefab 使用空的标准根节点包装原始 Prefab；原始素材只作为嵌套 Prefab 被引用，工具不会修改原始 Prefab。
+- 备用 Prefab 必须位于 `Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/`，根节点必须挂有 `PrefabStructureInfo`，且根 Transform 必须为 position `(0,0,0)`、rotation identity、scale `(1,1,1)`。
+- 首次生成使用空的标准根节点包装源 Prefab；生成后可自由调整所有子物体的变换，并可增加、删除或拼合多个对象。再次处理同名备用 Prefab 不会重建或覆盖这些人工修改，只更新结构信息与 Billboard。
 - 工具产生的主配置、生成组和 MapData 保存在工具内的 `TerrainGeneratorConfigs/`；所有备用 Prefab、Billboard 图片和派生材质集中保存在 `Generated/`，不会直接散落在工具根目录。删除工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
 - `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。
 - 批量添加在 BillboardMode 非 None 时会立即完成截图、材质、面片和 LOD 装配；批量更新 Billboard 可在之后统一重建。截图固定来自 `(0,0,1)`，并使用强度 2 的相机同向平行光；每个备用 Prefab 使用 `src/billboard.mat` 为模板创建独立的透明、双面、无阴影材质，并自动装入 `src/cross.prefab` 或 `src/linear.prefab`。两个面片 Prefab 均使用标准根 Transform，模型为第一个子物体；缩放基准为宽 2m、高 1m。面片 X/Z 中心对齐 Bounds 中心，底部枢轴对齐 Bounds 的 Y 最低点。
 - 生成目录固定为：`Generated/Prefabs/`（备用 Prefab）、`Generated/Billboards/`（PNG）、`Generated/Materials/`（派生材质）。`Generated/` 已从工具源码版本控制中排除。
 - Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1；LOD0 在屏幕相对高度降至 10% 时切换到 LOD1，LOD1 在 1% 时剔除。
 - **已知问题（待后续解决）**：透明交叉面片存在渲染遮挡/排序异常，特定视角下可能表现为其中一个面片始终位于另一个面片前方。当前 Shader 的透明深度方案不能覆盖所有交叉透明面的排序情形，后续需要专门调整渲染方案。
-- 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
+- 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、不是 `Generated/Prefabs/` 中的备用 Prefab、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
 - 工作流配置页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds；应用页仅保留目标 Terrain、应用阶段和执行入口。
 
 ## 与 unity-python-bridge 的关系 [已完成]
