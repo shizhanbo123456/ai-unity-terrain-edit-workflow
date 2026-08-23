@@ -8,10 +8,8 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 构建端组件：接收主配置 SO，将一个真实 Terrain 构建为工作流编辑器中的样子
     /// （高度 / 贴图 / 散布 / 摆件 / 定点，详见 README「完整生成逻辑伪代码」）。
     ///
-    /// 当前已实现：散布生成组的**按区块动态生成与回收**——Build 时按组初始化区块管理器
-    /// （<see cref="ChunkUpdateManager"/>）与对象池；
-    /// 由 <see cref="SetCameraPosition"/> 驱动：区块中心进入可见距离则按生成参数生成并填充，
-    /// 超出则回收物体到对象池。其余构建步骤（高度 / 贴图 / 摆件 / 定点）待实现。
+    /// 已实现高度、地形贴图、散布和定点构建。散布在 Build 时预计算全地形各区块的位置列表，
+    /// 再由 <see cref="SetCameraPosition"/> 驱动对象池的动态生成与回收。摆件构建仍待实现。
     ///
     /// 对象池约定：
     ///   - 每个散布 Prefab 分配唯一 key（= 组内 Prefab 池索引），物体 name = key.ToString()，
@@ -30,6 +28,14 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private sealed class ScatterRuntime
         {
+            public sealed class Placement
+            {
+                public int prefabKey;
+                public Vector2Int pixel;
+                public float scale;
+                public float yaw;
+            }
+
             public ScatterConfigSO config;
             public ChunkUpdateManager chunks;
             public int seed;
@@ -38,10 +44,13 @@ namespace AiTerrainWorkflow.LayerEditor
             public readonly List<int> prefabWeights = new List<int>();
             public readonly Dictionary<Vector2Int, List<GameObject>> objectsByChunk =
                 new Dictionary<Vector2Int, List<GameObject>>();
+            public readonly Dictionary<Vector2Int, List<Placement>> placementsByChunk =
+                new Dictionary<Vector2Int, List<Placement>>();
         }
 
         private readonly List<ScatterRuntime> _scatterRuntimes = new List<ScatterRuntime>();
         private Transform _poolRoot;
+        private Transform _fixedRoot;
 
         // MapData 缓存（Build 时读取一次；高度以 Terrain 为准，不读 height）
         private float[][] _layerMapData;
@@ -56,7 +65,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         /// <summary>
         /// 构建：创建本次 MapData 内存会话，并从高度到 applyThrough 按顺序应用各阶段。
-        /// 注意：当前实现假定单次 Build；重复 Build 需先自行回收全部已生成物体。
+        /// 重复 Build 执行到散布/定点阶段时会重建对应根节点，避免重复保留上一次生成物。
         /// </summary>
         public void Build(TerrainPaintProjectSO projectConfig, Terrain terrain, TerrainWorkflowStage applyThrough)
         {
@@ -81,14 +90,118 @@ namespace AiTerrainWorkflow.LayerEditor
             ApplyFixedPoints();
         }
 
-        /// <summary>应用高度数据；具体实现后续补充。</summary>
+        /// <summary>把真实高度 MapData 双线性采样到 Terrain heightmap，并按 Terrain 高度归一化。</summary>
         private void ApplyHeight()
         {
+            float[][] layerMap = MapData.Get("layerMap");
+            if (!TryGetMapSize(layerMap, out int mapW, out int mapH))
+            {
+                Debug.LogWarning("[TerrainBuilder] layerMap 缺失，跳过高度应用。");
+                return;
+            }
+
+            float[][] height = MapData.Get("height");
+            if (!HasMapSize(height, mapW, mapH))
+            {
+                int[] layerIds = FlattenLayerIds(layerMap, mapW, mapH);
+                height = TerrainRoadGen.BakeHeightData(_config, layerIds, mapW, mapH);
+                if (height == null) return;
+                MapData.Set("height", height);
+            }
+
+            TerrainData terrainData = _terrain.terrainData;
+            int resolution = terrainData.heightmapResolution;
+            var normalized = new float[resolution, resolution];
+            float terrainHeight = Mathf.Max(0.0001f, terrainData.size.y);
+            for (int z = 0; z < resolution; z++)
+            {
+                float v = resolution > 1 ? (float)z / (resolution - 1) : 0f;
+                for (int x = 0; x < resolution; x++)
+                {
+                    float u = resolution > 1 ? (float)x / (resolution - 1) : 0f;
+                    normalized[z, x] = Mathf.Clamp01(SampleBilinear(height, u, v) / terrainHeight);
+                }
+            }
+            terrainData.SetHeights(0, 0, normalized);
         }
 
-        /// <summary>应用地形贴图；具体实现后续补充。</summary>
+        /// <summary>噪声混合自然/道路各自的权重结果，再按道路噪声参数混合两类地表。</summary>
         private void ApplyTexture()
         {
+            float[][] layerMap = MapData.Get("layerMap");
+            if (!TryGetMapSize(layerMap, out int mapW, out int mapH))
+            {
+                Debug.LogWarning("[TerrainBuilder] layerMap 缺失，跳过贴图应用。");
+                return;
+            }
+            EnsureRoadMapData(layerMap, mapW, mapH);
+            float[][] road = MapData.Get("road");
+            if (!HasMapSize(road, mapW, mapH))
+            {
+                Debug.LogWarning("[TerrainBuilder] road MapData 缺失，跳过贴图应用。");
+                return;
+            }
+
+            List<TerrainLayer> terrainLayers = BuildTerrainLayerUnion();
+            if (terrainLayers.Count == 0)
+            {
+                Debug.LogWarning("[TerrainBuilder] 未配置 TerrainLayer，跳过贴图应用。");
+                return;
+            }
+
+            TerrainData terrainData = _terrain.terrainData;
+            terrainData.terrainLayers = terrainLayers.ToArray();
+            int alphaW = terrainData.alphamapWidth;
+            int alphaH = terrainData.alphamapHeight;
+            var alphamaps = new float[alphaH, alphaW, terrainLayers.Count];
+            float noiseScale = Mathf.Max(0.01f, _config.config.noiseScale);
+
+            for (int z = 0; z < alphaH; z++)
+            {
+                float v = alphaH > 1 ? (float)z / (alphaH - 1) : 0f;
+                for (int x = 0; x < alphaW; x++)
+                {
+                    float u = alphaW > 1 ? (float)x / (alphaW - 1) : 0f;
+                    float sampleWorldX = u * terrainData.size.x;
+                    float sampleWorldZ = v * terrainData.size.z;
+                    int layerIndex = Mathf.RoundToInt(SampleNearest(layerMap, u, v));
+                    LayerConfigSO layer = layerIndex >= 0 && layerIndex < _config.layers.Count
+                        ? _config.layers[layerIndex]
+                        : null;
+                    float[] natural = BuildNoisyWeights(
+                        layer != null ? layer.naturalLayerWeights : null,
+                        _config.naturalTerrainLayers,
+                        terrainLayers,
+                        sampleWorldX, sampleWorldZ, _config.naturalSeed, noiseScale);
+                    float[] roadWeights = BuildNoisyWeights(
+                        layer != null ? layer.roadLayerWeights : null,
+                        _config.roadTerrainLayers,
+                        terrainLayers,
+                        sampleWorldX, sampleWorldZ, _config.roadSeed, noiseScale);
+
+                    float roadMask = Mathf.Clamp01(SampleNearest(road, u, v));
+                    float roadNoise = Mathf.PerlinNoise(
+                        sampleWorldX / noiseScale + _config.roadSeed * 0.173f,
+                        sampleWorldZ / noiseScale + _config.roadSeed * 0.317f);
+                    float roadBlend = roadMask * roadNoise;
+                    if (!HasPositiveWeight(roadWeights)) roadBlend = 0f;
+                    if (!HasPositiveWeight(natural)) roadBlend = 1f;
+
+                    float total = 0f;
+                    for (int i = 0; i < terrainLayers.Count; i++)
+                    {
+                        float value = Mathf.Lerp(natural[i], roadWeights[i], roadBlend);
+                        alphamaps[z, x, i] = value;
+                        total += value;
+                    }
+                    if (total <= 0.000001f)
+                        alphamaps[z, x, 0] = 1f;
+                    else
+                        for (int i = 0; i < terrainLayers.Count; i++)
+                            alphamaps[z, x, i] /= total;
+                }
+            }
+            terrainData.SetAlphamaps(0, 0, alphamaps);
         }
 
         /// <summary>初始化各散布生成组的流式区块与对象池。</summary>
@@ -109,13 +222,11 @@ namespace AiTerrainWorkflow.LayerEditor
             _wppX = terrain.terrainData.size.x / Mathf.Max(1, mapW - 1);
             _wppZ = terrain.terrainData.size.z / Mathf.Max(1, mapH - 1);
 
-            // 隐藏容器：Hierarchy 面板不显示（所有后代节点也不显示）
-            if (_poolRoot == null)
-            {
-                var go = new GameObject("_TerrainBuilderPools");
-                go.hideFlags = HideFlags.HideInHierarchy;
-                _poolRoot = go.transform;
-            }
+            ClearGeneratedRoot(ref _poolRoot);
+            var poolObject = new GameObject("_TerrainBuilderPools");
+            poolObject.hideFlags = HideFlags.HideInHierarchy;
+            poolObject.transform.SetParent(transform, false);
+            _poolRoot = poolObject.transform;
 
             _scatterRuntimes.Clear();
             for (int groupIndex = 0; groupIndex < projectConfig.scatterGroups.Count; groupIndex++)
@@ -137,6 +248,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     runtime.prefabKeys.Add(prefabIndex);
                     runtime.prefabWeights.Add(entry.weight);
                 }
+                PrecomputeScatterPlacements(runtime);
                 _scatterRuntimes.Add(runtime);
             }
         }
@@ -146,9 +258,33 @@ namespace AiTerrainWorkflow.LayerEditor
         {
         }
 
-        /// <summary>应用定点物体；具体实现后续补充。</summary>
+        /// <summary>按归一化 X/Z、统一旋转和缩放实例化定点物体。</summary>
         private void ApplyFixedPoints()
         {
+            ClearGeneratedRoot(ref _fixedRoot);
+            var rootObject = new GameObject("_TerrainBuilderFixedPoints");
+            rootObject.transform.SetParent(transform, false);
+            _fixedRoot = rootObject.transform;
+
+            foreach (FixedPointConfigSO group in _config.fixedPointGroups)
+            {
+                if (group == null || group.prefab == null || group.positions == null)
+                    continue;
+                Quaternion rotation = Quaternion.Euler(0f, group.rotationDegrees, 0f);
+                float scale = Mathf.Max(0f, group.scale);
+                foreach (Vector2 uv in group.positions)
+                {
+                    Vector3 terrainPosition = _terrain.transform.position;
+                    Vector3 terrainSize = _terrain.terrainData.size;
+                    float worldX = terrainPosition.x + Mathf.Clamp01(uv.x) * terrainSize.x;
+                    float worldZ = terrainPosition.z + Mathf.Clamp01(uv.y) * terrainSize.z;
+                    var instance = Instantiate(group.prefab, _fixedRoot);
+                    instance.transform.rotation = rotation;
+                    instance.transform.localScale = Vector3.one * scale;
+                    float worldY = SamplePlacementHeight(group.prefab, worldX, worldZ, rotation, scale);
+                    instance.transform.position = new Vector3(worldX, worldY, worldZ);
+                }
+            }
         }
 
         private ObjectPool<GameObject> CreatePool(GameObject prefab, int key)
@@ -208,12 +344,7 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        /// <summary>
-        /// 生成单个散布区块：
-        /// 世界范围 → 像素范围 → 收集合法像素（语义层 lid≥1、非道路、offRoad ≥ 对应离路限制）
-        /// → 区块 seed = 全局 seed ⊕ 区块 index → 按层密度洗牌取位 → 按权重选原型 → 从对象池取出并摆放
-        /// （高度 = Terrain.SampleHeight，位置 = 像素中心 × 实际 worldPerPixel + Terrain 原点）。
-        /// </summary>
+        /// <summary>实例化 Build 时已经为该区块确定的散布位置列表。</summary>
         private void GenerateChunk(ScatterRuntime runtime, Vector2Int idx)
         {
             if (!_dataReady)
@@ -226,76 +357,25 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            runtime.chunks.GetChunkBounds(idx, out float xMin, out float yMin, out float xMax, out float yMax);
-            int mapH = _layerMapData.Length;
-            int mapW = mapH > 0 ? _layerMapData[0].Length : 0;
-            if (mapW <= 0) return;
-
-            // 世界范围 → 像素范围（clamp 到 map 内）
-            int pxMin = Mathf.Clamp(Mathf.FloorToInt(xMin / _wppX), 0, mapW - 1);
-            int pxMax = Mathf.Clamp(Mathf.CeilToInt(xMax / _wppX) - 1, 0, mapW - 1);
-            int pzMin = Mathf.Clamp(Mathf.FloorToInt(yMin / _wppZ), 0, mapH - 1);
-            int pzMax = Mathf.Clamp(Mathf.CeilToInt(yMax / _wppZ) - 1, 0, mapH - 1);
-
-            // 收集合法像素：语义层（lid≥1）+ 非道路 + 离路 ≥ 对应 limit
-            var layerPixels = new Dictionary<int, List<Vector2Int>>();
-            for (int pz = pzMin; pz <= pzMax; pz++)
-            {
-                var row = _layerMapData[pz];
-                for (int px = pxMin; px <= pxMax; px++)
-                {
-                    int lid = Mathf.RoundToInt(row[px]);
-                    int layerIndex = lid < 0 ? 0 : lid;
-                    if (layerIndex >= TerrainPaintProjectSO.MaxLayerCount)
-                        continue;
-                    var layerFlag = (TerrainWorkflowLayerMask)(1 << layerIndex);
-                    if ((runtime.config.targetLayers & layerFlag) == 0) continue;
-                    if (_roadData[pz][px] > 0.5f)
-                        continue;
-                    float offRoad = _offRoadData[pz][px];
-                    if (offRoad < runtime.config.offRoadDistanceRange.x ||
-                        offRoad > runtime.config.offRoadDistanceRange.y)
-                        continue;
-                    if (!layerPixels.TryGetValue(layerIndex, out var list))
-                    {
-                        list = new List<Vector2Int>();
-                        layerPixels[layerIndex] = list;
-                    }
-                    list.Add(new Vector2Int(px, pz));
-                }
-            }
-
-            // 区块 seed：全局 seed ⊕ 区块 index（不同区块不重复、可复现）
-            int chunkSeed = runtime.seed ^ (idx.x * 73856093) ^ (idx.y * 19349663);
-            var rng = new System.Random(chunkSeed);
-            float pixelArea = _wppX * _wppZ;
-
             var placed = new List<GameObject>();
-            foreach (var kv in layerPixels)
+            if (!runtime.placementsByChunk.TryGetValue(idx, out var placements))
             {
-                var pixels = kv.Value;
-                float density = runtime.config.density;
-                if (density <= 0f) continue;
-                int count = Mathf.FloorToInt(pixels.Count * pixelArea * density);
-                if (count <= 0) continue;
-
-                Shuffle(pixels, rng); // 洗牌取前 count 个：均匀、无重复
-                int take = Mathf.Min(count, pixels.Count);
-                var scaleRange = runtime.config.randomScale;
-
-                for (int i = 0; i < take; i++)
-                {
-                    var pxp = pixels[i];
-                    if (runtime.prefabKeys.Count == 0) continue;
-                    int key = PickWeightedPrefab(runtime, rng);
-                    if (!runtime.pools.TryGetValue(key, out var pool))
-                        continue;
-                    var go = pool.Get();
-                    float s = Mathf.Lerp(scaleRange.x, scaleRange.y, (float)rng.NextDouble());
-                    go.transform.position = PixelToWorld(pxp.x, pxp.y);
-                    go.transform.localScale = Vector3.one * s;
-                    placed.Add(go);
-                }
+                runtime.objectsByChunk[idx] = placed;
+                return;
+            }
+            foreach (ScatterRuntime.Placement placement in placements)
+            {
+                if (!runtime.pools.TryGetValue(placement.prefabKey, out var pool)) continue;
+                GameObject prefab = runtime.config.prefabs[placement.prefabKey].prefab;
+                var go = pool.Get();
+                Quaternion rotation = Quaternion.Euler(0f, placement.yaw, 0f);
+                go.transform.rotation = rotation;
+                go.transform.localScale = Vector3.one * placement.scale;
+                Vector3 position = PixelToWorld(placement.pixel.x, placement.pixel.y);
+                position.y = SamplePlacementHeight(
+                    prefab, position.x, position.z, rotation, placement.scale);
+                go.transform.position = position;
+                placed.Add(go);
             }
 
             runtime.objectsByChunk[idx] = placed;
@@ -309,6 +389,249 @@ namespace AiTerrainWorkflow.LayerEditor
             float wz = tPos.z + pz * _wppZ;
             float wy = tPos.y + _terrain.SampleHeight(new Vector3(wx, 0f, wz));
             return new Vector3(wx, wy, wz);
+        }
+
+        private void PrecomputeScatterPlacements(ScatterRuntime runtime)
+        {
+            runtime.placementsByChunk.Clear();
+            if (!_dataReady || runtime.prefabKeys.Count == 0 || runtime.config.density <= 0f)
+                return;
+            Vector3 terrainSize = _terrain.terrainData.size;
+            float chunkWidth = Mathf.Max(0.0001f, runtime.config.chunkSize.x);
+            float chunkDepth = Mathf.Max(0.0001f, runtime.config.chunkSize.y);
+            int countX = Mathf.CeilToInt(terrainSize.x / chunkWidth);
+            int countZ = Mathf.CeilToInt(terrainSize.z / chunkDepth);
+            for (int x = 0; x < countX; x++)
+            for (int z = 0; z < countZ; z++)
+                PrecomputeScatterChunk(runtime, new Vector2Int(x, z));
+        }
+
+        private void PrecomputeScatterChunk(ScatterRuntime runtime, Vector2Int idx)
+        {
+            runtime.chunks.GetChunkBounds(idx, out float xMin, out float zMin, out float xMax, out float zMax);
+            Vector3 terrainSize = _terrain.terrainData.size;
+            xMax = Mathf.Min(xMax, terrainSize.x);
+            zMax = Mathf.Min(zMax, terrainSize.z);
+            int mapH = _layerMapData.Length;
+            int mapW = _layerMapData[0].Length;
+            int pxMin = Mathf.Clamp(Mathf.CeilToInt(xMin / _wppX), 0, mapW - 1);
+            int pxMax = xMax >= terrainSize.x
+                ? mapW - 1
+                : Mathf.Clamp(Mathf.CeilToInt(xMax / _wppX) - 1, 0, mapW - 1);
+            int pzMin = Mathf.Clamp(Mathf.CeilToInt(zMin / _wppZ), 0, mapH - 1);
+            int pzMax = zMax >= terrainSize.z
+                ? mapH - 1
+                : Mathf.Clamp(Mathf.CeilToInt(zMax / _wppZ) - 1, 0, mapH - 1);
+
+            var layerPixels = new Dictionary<int, List<Vector2Int>>();
+            for (int pz = pzMin; pz <= pzMax; pz++)
+            for (int px = pxMin; px <= pxMax; px++)
+            {
+                int layerIndex = Mathf.Max(0, Mathf.RoundToInt(_layerMapData[pz][px]));
+                if (layerIndex >= TerrainPaintProjectSO.MaxLayerCount) continue;
+                var layerFlag = (TerrainWorkflowLayerMask)(1 << layerIndex);
+                if ((runtime.config.targetLayers & layerFlag) == 0) continue;
+                if (_roadData[pz][px] > 0.5f) continue;
+                float offRoad = _offRoadData[pz][px];
+                if (offRoad < runtime.config.offRoadDistanceRange.x ||
+                    offRoad > runtime.config.offRoadDistanceRange.y) continue;
+                if (!layerPixels.TryGetValue(layerIndex, out var pixels))
+                {
+                    pixels = new List<Vector2Int>();
+                    layerPixels[layerIndex] = pixels;
+                }
+                pixels.Add(new Vector2Int(px, pz));
+            }
+
+            int chunkSeed = runtime.seed ^ (idx.x * 73856093) ^ (idx.y * 19349663);
+            var rng = new System.Random(chunkSeed);
+            float pixelArea = _wppX * _wppZ;
+            var placements = new List<ScatterRuntime.Placement>();
+            foreach (List<Vector2Int> pixels in layerPixels.Values)
+            {
+                int count = Mathf.Min(
+                    pixels.Count,
+                    Mathf.FloorToInt(pixels.Count * pixelArea * runtime.config.density));
+                if (count <= 0) continue;
+                Shuffle(pixels, rng);
+                for (int i = 0; i < count; i++)
+                {
+                    int key = PickWeightedPrefab(runtime, rng);
+                    if (key < 0) continue;
+                    placements.Add(new ScatterRuntime.Placement
+                    {
+                        prefabKey = key,
+                        pixel = pixels[i],
+                        scale = Mathf.Lerp(
+                            runtime.config.randomScale.x,
+                            runtime.config.randomScale.y,
+                            (float)rng.NextDouble()),
+                        yaw = (float)rng.NextDouble() * 360f,
+                    });
+                }
+            }
+            runtime.placementsByChunk[idx] = placements;
+        }
+
+        private float SamplePlacementHeight(
+            GameObject prefab,
+            float worldX,
+            float worldZ,
+            Quaternion rotation,
+            float scale)
+        {
+            PrefabStructureInfo info = prefab != null ? prefab.GetComponent<PrefabStructureInfo>() : null;
+            if (info == null || !info.twoPointHeightAdaptation)
+                return SampleTerrainWorldHeight(worldX, worldZ);
+
+            Vector3 leftOffset = rotation * new Vector3(info.boundsX.x * scale, 0f, 0f);
+            Vector3 rightOffset = rotation * new Vector3(info.boundsX.y * scale, 0f, 0f);
+            float leftHeight = SampleTerrainWorldHeight(worldX + leftOffset.x, worldZ + leftOffset.z);
+            float rightHeight = SampleTerrainWorldHeight(worldX + rightOffset.x, worldZ + rightOffset.z);
+            return (leftHeight + rightHeight) * 0.5f;
+        }
+
+        private float SampleTerrainWorldHeight(float worldX, float worldZ)
+        {
+            Vector3 terrainPosition = _terrain.transform.position;
+            Vector3 terrainSize = _terrain.terrainData.size;
+            float x = Mathf.Clamp(worldX, terrainPosition.x, terrainPosition.x + terrainSize.x);
+            float z = Mathf.Clamp(worldZ, terrainPosition.z, terrainPosition.z + terrainSize.z);
+            return terrainPosition.y + _terrain.SampleHeight(new Vector3(x, terrainPosition.y, z));
+        }
+
+        private void EnsureRoadMapData(float[][] layerMap, int mapW, int mapH)
+        {
+            if (HasMapSize(MapData.Get("distance"), mapW, mapH) &&
+                HasMapSize(MapData.Get("occupancy"), mapW, mapH) &&
+                HasMapSize(MapData.Get("road"), mapW, mapH) &&
+                HasMapSize(MapData.Get("offRoad"), mapW, mapH))
+                return;
+            if (_config.FindDuplicateLayerIndices().Count > 0)
+            {
+                Debug.LogError("[TerrainBuilder] 邻接组存在重复 Layer，无法生成道路数据。");
+                return;
+            }
+            int[] ids = FlattenLayerIds(layerMap, mapW, mapH);
+            Texture2D preview = TerrainRoadGen.ComputeAll(
+                _config, ids, mapW, mapH, out var distance, out var occupancy, out var road);
+            if (preview == null) return;
+            if (Application.isPlaying) Destroy(preview);
+            else DestroyImmediate(preview);
+            MapData.Set("distance", CsvArrayCodec.ToJagged(distance, mapW, mapH));
+            MapData.Set("occupancy", CsvArrayCodec.ToJagged(occupancy, mapW, mapH));
+            MapData.Set("road", CsvArrayCodec.ToJagged(road, mapW, mapH));
+            MapData.Set("offRoad", CsvArrayCodec.ToJagged(
+                TerrainRoadGen.ComputeOffRoad(ids, road, mapW, mapH, _config.config.worldPerPixel), mapW, mapH));
+        }
+
+        private List<TerrainLayer> BuildTerrainLayerUnion()
+        {
+            var result = new List<TerrainLayer>();
+            foreach (TerrainLayer layer in _config.naturalTerrainLayers)
+                if (layer != null && !result.Contains(layer)) result.Add(layer);
+            foreach (TerrainLayer layer in _config.roadTerrainLayers)
+                if (layer != null && !result.Contains(layer)) result.Add(layer);
+            return result;
+        }
+
+        private static float[] BuildNoisyWeights(
+            List<int> configuredWeights,
+            List<TerrainLayer> sourceLayers,
+            List<TerrainLayer> union,
+            float worldX,
+            float worldZ,
+            int seed,
+            float noiseScale)
+        {
+            var result = new float[union.Count];
+            if (configuredWeights == null || sourceLayers == null) return result;
+            int count = Mathf.Min(configuredWeights.Count, sourceLayers.Count);
+            for (int i = 0; i < count; i++)
+            {
+                int baseWeight = configuredWeights[i];
+                TerrainLayer terrainLayer = sourceLayers[i];
+                if (baseWeight <= 0 || terrainLayer == null) continue;
+                int target = union.IndexOf(terrainLayer);
+                if (target < 0) continue;
+                float noise = Mathf.PerlinNoise(
+                    worldX / noiseScale + seed * 0.131f + i * 17.17f,
+                    worldZ / noiseScale + seed * 0.293f + i * 31.31f);
+                result[target] += baseWeight * Mathf.Lerp(0.5f, 1.5f, noise);
+            }
+            Normalize(result);
+            return result;
+        }
+
+        private static bool HasPositiveWeight(float[] weights)
+        {
+            for (int i = 0; i < weights.Length; i++)
+                if (weights[i] > 0f) return true;
+            return false;
+        }
+
+        private static void Normalize(float[] values)
+        {
+            float sum = 0f;
+            for (int i = 0; i < values.Length; i++) sum += values[i];
+            if (sum <= 0.000001f) return;
+            for (int i = 0; i < values.Length; i++) values[i] /= sum;
+        }
+
+        private static bool TryGetMapSize(float[][] map, out int width, out int height)
+        {
+            height = map != null ? map.Length : 0;
+            width = height > 0 && map[0] != null ? map[0].Length : 0;
+            return HasMapSize(map, width, height) && width > 0 && height > 0;
+        }
+
+        private static bool HasMapSize(float[][] map, int width, int height)
+        {
+            if (map == null || map.Length != height || width <= 0 || height <= 0) return false;
+            for (int y = 0; y < height; y++)
+                if (map[y] == null || map[y].Length != width) return false;
+            return true;
+        }
+
+        private static int[] FlattenLayerIds(float[][] layerMap, int width, int height)
+        {
+            var result = new int[width * height];
+            for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                result[y * width + x] = Mathf.RoundToInt(layerMap[y][x]);
+            return result;
+        }
+
+        private static float SampleNearest(float[][] map, float u, float v)
+        {
+            int height = map.Length;
+            int width = map[0].Length;
+            int x = Mathf.Clamp(Mathf.RoundToInt(u * (width - 1)), 0, width - 1);
+            int y = Mathf.Clamp(Mathf.RoundToInt(v * (height - 1)), 0, height - 1);
+            return map[y][x];
+        }
+
+        private static float SampleBilinear(float[][] map, float u, float v)
+        {
+            int height = map.Length;
+            int width = map[0].Length;
+            float fx = Mathf.Clamp01(u) * (width - 1);
+            float fy = Mathf.Clamp01(v) * (height - 1);
+            int x0 = Mathf.FloorToInt(fx), x1 = Mathf.Min(x0 + 1, width - 1);
+            int y0 = Mathf.FloorToInt(fy), y1 = Mathf.Min(y0 + 1, height - 1);
+            float tx = fx - x0, ty = fy - y0;
+            return Mathf.Lerp(
+                Mathf.Lerp(map[y0][x0], map[y0][x1], tx),
+                Mathf.Lerp(map[y1][x0], map[y1][x1], tx),
+                ty);
+        }
+
+        private static void ClearGeneratedRoot(ref Transform root)
+        {
+            if (root == null) return;
+            if (Application.isPlaying) Destroy(root.gameObject);
+            else DestroyImmediate(root.gameObject);
+            root = null;
         }
 
         private static void Shuffle<T>(List<T> list, System.Random rng)

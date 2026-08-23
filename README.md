@@ -109,7 +109,7 @@ function NormalizedToTerrainWorld(uv, terrain):
 
 首末像素的**中心**分别对齐 Terrain 局部坐标 `0` 与 `size`；因此像素实际覆盖在边界外额外延伸半个像素间距。
 
-### 3. 高度生成与应用（`ApplyHeight`，应用待实现）
+### 3. 高度生成与应用（`ApplyHeight`，已实现）
 
 ```text
 function CalculateHeightMap(project, layerMap):
@@ -136,14 +136,13 @@ function ApplyHeight(session):
     height = EnsureMapData(session, "height",
         () => CalculateHeightMap(project, layerMap))
 
-    minHeight, maxHeight = FindRange(height)
     normalized = ResizeAndSampleBilinear(
         height, terrain.terrainData.heightmapResolution,
-        value => InverseLerp(minHeight, maxHeight, value))
+        value => clamp01(value / terrain.terrainData.size.y))
     terrain.terrainData.SetHeights(normalized)
 ```
 
-### 4. 距离场、路网与地形贴图（`ApplyTexture`，Terrain 权重应用待实现）
+### 4. 距离场、路网与地形贴图（`ApplyTexture`，已实现）
 
 ```text
 function CalculateRoadMapData(project, layerMap):
@@ -191,22 +190,15 @@ function ApplyTexture(session):
 
     for each alphamap sample p:
         layerIndex = SampleNearest(layerMap, p)
-        isRoad = SampleNearest(road, p) > 0.5
-        sourceWeights = isRoad
-            ? project.layers[layerIndex].roadLayerWeights
-            : project.layers[layerIndex].naturalLayerWeights
-
-        for each terrainLayer i:
-            weight[i] = sourceWeights[i]
-            weight[i] *= DeterministicTextureNoise(p, i, naturalSeed/roadSeed)
-            // 边界混合若启用，在此处按 distance 调整
-        NormalizeWeightsOrUseFallback(weight)
-        alphamap[p] = weight
+        natural = Normalize(naturalWeights * PerLayerNoise(naturalSeed))
+        roadSurface = Normalize(roadWeights * PerLayerNoise(roadSeed))
+        roadBlend = SampleNearest(road, p) * RoadBlendNoise(roadSeed)
+        alphamap[p] = Normalize(lerp(natural, roadSurface, roadBlend))
 
     terrain.terrainData.SetAlphamaps(alphamap)
 ```
 
-### 5. 散布生成与流式更新（`ApplyScatter`，部分已实现）
+### 5. 散布生成与流式更新（`ApplyScatter`，已实现）
 
 ```text
 function ApplyScatter(session):
@@ -215,6 +207,7 @@ function ApplyScatter(session):
         runtime.seed = project.scatterSeed XOR Hash(groupIndex)
         runtime.chunks = ChunkUpdateManager(group.chunkSize, group.visibleDistance)
         runtime.prefabPools = CreatePools(group.prefabs where prefab != null and weight > 0)
+        runtime.placementsByChunk = PrecomputeAllTerrainChunkPlacements(group)
         register runtime
 
 function SetCameraPosition(worldXZ):
@@ -224,9 +217,9 @@ function SetCameraPosition(worldXZ):
         for each inactive chunk:
             release every instance to its prefab pool
         for each newly active chunk:
-            GenerateScatterChunk(runtime, chunk)
+            InstantiatePrecomputedChunk(runtime, chunk)
 
-function GenerateScatterChunk(runtime, chunk):
+function PrecomputeScatterChunk(runtime, chunk):
     candidatePixels = all pixels whose centers fall inside chunk bounds
     filter candidatePixels where:
         group.targetLayers contains layerMap[p]
@@ -239,10 +232,12 @@ function GenerateScatterChunk(runtime, chunk):
 
     for each p in selected:
         prefab = WeightedPick(group.prefabs, rng)
-        instance = prefabPool.Get(prefab)
-        instance.position = PixelToTerrainWorld(p)
-        instance.scale = uniform(
-            group.randomScale.min, group.randomScale.max, rng)
+        placements.Add(position, prefab, scale, yaw)
+
+function InstantiatePrecomputedChunk(runtime, chunk):
+    for each placement in runtime.placementsByChunk[chunk]:
+        instance = prefabPool.Get(placement.prefab)
+        apply placement pose and two-point height adaptation
 ```
 
 ### 6. 摆件生成（`ApplyProps`，待实现）
@@ -303,7 +298,7 @@ function ApplyProps(session):
 
 `distributionMode` 的候选点规则：`Scatter` 在有效区域独立取点；`Cluster` 以一个中心向周围聚簇；`Extend` 沿已接受物体的局部方向延伸。
 
-### 7. 定点生成（`ApplyFixedPoints`，待实现）
+### 7. 定点生成（`ApplyFixedPoints`，已实现）
 
 ```text
 function ApplyFixedPoints(session):
@@ -359,8 +354,8 @@ function WorkflowConfig.DrawMapDataPreview():
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
 | 4 散布编辑 | layerMap + 多个散布生成组 | 按组配置目标层级、离路范围、密度、缩放、Prefab 池与流式区块参数 | `ScatterConfig/*.asset`；位置不存储 | **[已完成]**（配置编辑 + 分组流式生成） |
 | 5 摆件编辑 | 物体库 prefab + `PropConfigSO` | 候选点采样、值域/层级过滤、分布与间距约束 | `PropConfig/*.asset` | **[进行中]**（配置界面完成，放置算法待开发） |
-| 6 定点编辑 | layerMap + 定点生成组 | 在只读 layer 图上预览归一化固定位置；每组使用单个 Prefab | `FixedPointConfig/*.asset` | **[进行中]**（配置与位置预览完成；实际应用待开发） |
-| 7 应用 | 主配置 + Terrain + 最终阶段 | `TerrainBuilder.Build(project, terrain, applyThrough)` 按前缀顺序执行 | TerrainData + GameObject | **[进行中]**（散布已实现；高度/贴图/摆件/定点待实现） |
+| 6 定点编辑 | layerMap + 定点生成组 | 在只读 layer 图上预览归一化固定位置；每组使用单个 Prefab | `FixedPointConfig/*.asset` | **[已完成]**（配置、位置预览与实际应用） |
+| 7 应用 | 主配置 + Terrain + 最终阶段 | `TerrainBuilder.Build(project, terrain, applyThrough)` 按前缀顺序执行 | TerrainData + GameObject | **[进行中]**（高度/贴图/散布/定点已实现；摆件待实现） |
 
 ## 阶段详述
 
@@ -441,7 +436,8 @@ function WorkflowConfig.DrawMapDataPreview():
 - 主配置只保留一个全局 `scatterSeed`，不再区分树木与细节。
 - 每个 `ScatterConfigSO` 表示一个散布生成组，配置：区块尺寸、可见距离、Prefab 池、密度、随机缩放范围、离路距离范围（Vector2 min/max）和目标层级（`TerrainWorkflowLayerMask` Flags）。
 - 配置资产统一存放在 `TerrainGeneratorConfigs/<项目>/ScatterConfig/`；编辑器中的“添加散布生成组”会创建独立 `.asset`，删除组时同步删除对应资产。
-- 散布位置不烘焙、不落 MapData。`TerrainBuilder.SetCameraPosition(Vector2)` 按组维护独立区块管理器与对象池：目标层级与 `offRoad` 范围过滤通过后，按密度选择像素中心、按 Prefab 权重随机选择，并使用全局 seed ⊕ 组 index ⊕ 区块 index 保证结果可复现。
+- 散布位置不落 MapData。`TerrainBuilder.Build` 会遍历地形覆盖的全部区块，预计算每个区块的位置、Prefab、缩放和偏航列表；`SetCameraPosition(Vector2)` 只负责按可见距离从对象池实例化或回收。目标层级与 `offRoad` 范围过滤通过后，按密度选择像素中心、按 Prefab 权重随机选择，并使用全局 seed ⊕ 组 index ⊕ 区块 index 保证结果可复现。
+- 启用 `twoPointHeightAdaptation` 的 Prefab 会按缩放和 Y 旋转计算 Bounds X 两端的世界位置，分别采样 Terrain 高度并取平均值作为根节点 Y；散布和定点使用同一规则。
 - 最外圈像素与 Terrain 的映射遵守“像素中心对齐 Terrain 边界”规则；世界观察点在进入区块系统前转换为 Terrain 局部 X/Z 坐标。
 
 ### 阶段 6 · 定点编辑 [进行中]
@@ -449,13 +445,13 @@ function WorkflowConfig.DrawMapDataPreview():
 - 界面左侧只读显示当前 layer 图，右侧编辑多个定点生成组。
 - 每组配置标识颜色、单个 Prefab、归一化位置列表（X/Y 均为 0~1）、Y 轴旋转角度（0~360°）和统一缩放。
 - layer 图按标识颜色绘制每个位置；标记为带黑色外框的圆点，Y 坐标向上对应 Terrain 的 Z 方向。
-- 每组资产保存在 `TerrainGeneratorConfigs/<项目>/FixedPointConfig/`。配置与预览已完成，`TerrainBuilder.ApplyFixedPoints` 的实例化逻辑待开发。
+- 每组资产保存在 `TerrainGeneratorConfigs/<项目>/FixedPointConfig/`。`TerrainBuilder.ApplyFixedPoints` 会按归一化位置映射 Terrain X/Z，并应用配置的 Y 旋转、缩放和高度适应后实例化。
 
 ### 阶段 7 · 应用 [进行中]
 
 - 编辑器的「应用」子界面选择目标 Terrain 和最终阶段，已接线 `TerrainBuilder.Build(project, terrain, applyThrough)`。
 - 执行顺序固定为 `ApplyHeight → ApplyTexture → ApplyScatter → ApplyProps → ApplyFixedPoints`；未勾选前置阶段时，后续阶段不执行。
-- 当前 `ApplyScatter` 已实现；`ApplyHeight / ApplyTexture / ApplyProps / ApplyFixedPoints` 为已留出边界的待实现函数。
+- 当前 `ApplyHeight / ApplyTexture / ApplyScatter / ApplyFixedPoints` 已实现；`ApplyProps` 仍为待实现函数。
 - 散布不一次性创建全图实例：`Build` 初始化各生成组的 `ChunkUpdateManager` 与对象池，之后由 `SetCameraPosition(Vector2)` 驱动生成和回收。
 
 - **ApplyAlphamap 草案**：逐像素 `L = layerMap[p]`，`base = road[p]>0.5 ? roadLayerWeights[L] : naturalLayerWeights[L]`；对权重>0 的层叠加独立 Perlin 噪声打破条带（`w[i] = base[i] × (1 - blendSoft + blendSoft × n)`），可选按 `distance`（构建时现算归一化）做层边界渐变，归一化 Σw=1 → SetAlphamaps。参数（noiseScale / blendSoft / 是否距离场过渡）**[待设计]**；**seed 均为全局 seed**。
@@ -467,7 +463,7 @@ function WorkflowConfig.DrawMapDataPreview():
 - `TerrainRoadGen`、`DistanceFieldGenerator`、`UniformPointGenerator`、`ChunkUpdateManager` 等核心算法均不依赖 `UnityEditor`，Player 中可直接调用。
 - `TerrainBuilder.Build(projectConfig, terrain, applyThrough)` 是编辑器与运行时共用的唯一实地形应用入口；窗口的「应用」按钮只是对该入口的编辑器包装。
 - 散布阶段由 `SetCameraPosition(Vector2)` 按生成组流式生成 / 回收（区块管理器驱动，见阶段 5）。
-- 尚未实现的 `ApplyHeight / ApplyTexture / ApplyProps / ApplyFixedPoints` 也必须实现在运行时的 `TerrainBuilder` 或其运行时服务中，不得实现在 `LayerEditorWindow`。
+- 尚未实现的 `ApplyProps` 也必须实现在运行时的 `TerrainBuilder` 或其运行时服务中，不得实现在 `LayerEditorWindow`。
 
 ## MapData 存储层 [已完成]
 
@@ -498,9 +494,9 @@ LayerEditor/
 ├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
 ├── ScatterConfigSO.cs          [已完成] 单个散布生成组配置
 ├── PropConfigSO.cs             [已完成] 单个摆件生成组配置（实际放置待开发）
-├── FixedPointConfigSO.cs       [已完成] 单个定点生成组配置（实际应用待开发）
+├── FixedPointConfigSO.cs       [已完成] 单个定点生成组配置与实际应用
 ├── PrefabStructureInfo.cs      [已完成] 候选 Prefab 结构信息（Bounds、BillboardMode、运行时面片朝向 + 静态更新入口）
-├── TerrainBuilder.cs           [进行中] 构建组件（分组散布已实现；高度/贴图/摆件/定点待实现）
+├── TerrainBuilder.cs           [进行中] 构建组件（高度/贴图/散布/定点已实现；摆件待实现）
 └── Editor/
     ├── LayerEditorWindow.cs    [已完成] 八阶段工作流窗口（散布生成组 + 最终应用页 + MapData 接线）
     └── MapDataTextureUtils.cs  [已完成] float[][]↔Texture2D（仅显示/采集）
@@ -556,8 +552,8 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 
 - **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
 - **M2 [已完成]** 散布生成组配置编辑（区块、可见距离、Prefab 权重池、密度、缩放、离路范围、目标层级）及分组流式生成。
-- **M3 [进行中]** TerrainBuilder 组件（阶段枚举控制 + **分组散布的区块化对象池生成（SetCameraPosition 驱动）** 已完成；高度与构建时 alphamap 待实现）。
-- **M4 [进行中]** 摆件和定点生成组配置与预览已完成，实际应用函数待实现。
+- **M3 [已完成]** TerrainBuilder 高度、构建时 alphamap、全区块散布位置预计算及对象池流式生成已完成。
+- **M4 [进行中]** 定点实例化已完成；摆件生成组配置与预览已完成，实际摆件应用函数待实现。
 - **M5 [待设计]** bridge 可选集成（一键构建命令）。
 
 ## 待拍板事项（已收敛）
