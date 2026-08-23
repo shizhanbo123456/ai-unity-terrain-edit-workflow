@@ -179,6 +179,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ```
 Utils/
+├── DistanceFieldGenerator.cs   [已完成] bool[][] → int[][] 四邻域 BFS 距离场（运行时可用）
 ├── UniformPointGenerator.cs    [已完成] 均匀分布随机点（网格抖动 Jittered Grid，确定性种子可复现）
 └── ChunkUpdateManager.cs       [已完成] 区块更新管理器（激活/失活区块集合，MoveTo 驱动；供 TerrainBuilder 分组流式生成）
 
