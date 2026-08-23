@@ -61,6 +61,11 @@ namespace AiTerrainWorkflow.LayerEditor
         // 应用阶段（仅窗口会话状态）：必须为从高度开始的连续前缀。
         private readonly bool[] _applyStages = { true, true, true, true, true };
 
+        // 备用 Prefab 批量创建（仅窗口会话状态）。
+        private readonly List<GameObject> _candidatePrefabSources = new List<GameObject>();
+        private bool _candidateGenerateBillboard;
+        private bool _candidateTwoPointHeightAdaptation;
+
         // 创建配置 UI
         private bool _creating;
         private string _newConfigName = "";
@@ -550,6 +555,62 @@ namespace AiTerrainWorkflow.LayerEditor
         private void DrawApplyView()
         {
             _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+            EditorGUILayout.LabelField("备用预制体处理", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "批量创建和处理工作流目录下的备用预制体。创建时会为每个源 Prefab 生成标准 Transform 的同名包装 Prefab，" +
+                "并写入 PrefabStructureInfo。",
+                MessageType.Info);
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("批量添加备用预制体", EditorStyles.boldLabel);
+            for (int i = 0; i < _candidatePrefabSources.Count; i++)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    _candidatePrefabSources[i] = (GameObject)EditorGUILayout.ObjectField(
+                        $"Prefab {i + 1}", _candidatePrefabSources[i], typeof(GameObject), false);
+                    if (GUILayout.Button("移除", GUILayout.Width(48f)))
+                    {
+                        _candidatePrefabSources.RemoveAt(i);
+                        i--;
+                    }
+                }
+            }
+
+            if (GUILayout.Button("添加 Prefab 到列表", GUILayout.Height(22f)))
+                _candidatePrefabSources.Add(null);
+
+            _candidateGenerateBillboard = EditorGUILayout.Toggle(
+                "生成 Billboard", _candidateGenerateBillboard);
+            _candidateTwoPointHeightAdaptation = EditorGUILayout.Toggle(
+                "两点高度适应", _candidateTwoPointHeightAdaptation);
+
+            bool hasCandidateSource = _candidatePrefabSources.Exists(prefab => prefab != null);
+            using (new EditorGUI.DisabledScope(!hasCandidateSource))
+            {
+                if (GUILayout.Button("批量添加备用预制体", GUILayout.Height(26f)))
+                    RunCandidatePrefabBatch("备用预制体添加", BuildCandidatePrefabsFromList);
+            }
+
+            EditorGUILayout.Space(10);
+            EditorGUILayout.LabelField("批量更新备用预制体", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Billboard 仅处理已启用生成标记的对象；普通包围盒更新会跳过已有数据的对象。",
+                MessageType.None);
+
+            if (GUILayout.Button("批量更新 Billboard", GUILayout.Height(24f)))
+                RunCandidatePrefabBatch("Billboard", PrefabProcessingUtility.UpdateAllBillboards);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("更新包围盒", GUILayout.Height(24f)))
+                    RunCandidatePrefabBatch("包围盒", () => PrefabProcessingUtility.UpdateAllBounds(false));
+
+                if (GUILayout.Button("强制更新包围盒", GUILayout.Height(24f)))
+                    RunCandidatePrefabBatch("包围盒（强制）", () => PrefabProcessingUtility.UpdateAllBounds(true));
+            }
+
+            EditorGUILayout.Space(18);
             EditorGUILayout.LabelField("应用", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "这是工作流的最后一步。选择目标 Terrain 和需要应用到的最终阶段，然后按顺序执行高度至该阶段。",
@@ -578,26 +639,31 @@ namespace AiTerrainWorkflow.LayerEditor
                     ApplyWorkflowToTerrain();
             }
 
-            EditorGUILayout.Space(14);
-            EditorGUILayout.LabelField("备用预制体处理", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "批量处理工作流目录下根节点挂有 PrefabStructureInfo 的备用预制体。" +
-                "Billboard 仅处理已启用生成标记的对象；普通包围盒更新会跳过已有数据的对象。",
-                MessageType.Info);
-
-            if (GUILayout.Button("批量更新 Billboard", GUILayout.Height(24f)))
-                RunCandidatePrefabBatch("Billboard", PrefabProcessingUtility.UpdateAllBillboards);
-
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("更新包围盒", GUILayout.Height(24f)))
-                    RunCandidatePrefabBatch("包围盒", () => PrefabProcessingUtility.UpdateAllBounds(false));
-
-                if (GUILayout.Button("强制更新包围盒", GUILayout.Height(24f)))
-                    RunCandidatePrefabBatch("包围盒（强制）", () => PrefabProcessingUtility.UpdateAllBounds(true));
-            }
-
             EditorGUILayout.EndScrollView();
+        }
+
+        private int BuildCandidatePrefabsFromList()
+        {
+            int created = 0;
+            foreach (GameObject sourcePrefab in _candidatePrefabSources)
+            {
+                if (sourcePrefab == null)
+                    continue;
+                try
+                {
+                    PrefabProcessingUtility.BuildCandidatePrefab(
+                        sourcePrefab,
+                        _candidateGenerateBillboard,
+                        _candidateTwoPointHeightAdaptation);
+                    created++;
+                }
+                catch (System.Exception exception)
+                {
+                    string path = AssetDatabase.GetAssetPath(sourcePrefab);
+                    Debug.LogError($"[Terrain Paint Workflow] 备用预制体创建失败: {path}\n{exception}");
+                }
+            }
+            return created;
         }
 
         private void RunCandidatePrefabBatch(string operation, System.Func<int> action)
