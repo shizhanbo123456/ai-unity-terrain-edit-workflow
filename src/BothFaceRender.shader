@@ -16,7 +16,7 @@ Shader "Custom/BothFaceRender"
         }
         LOD 200
         Cull Off
-        ZWrite Off
+        ZWrite On
         Blend SrcAlpha OneMinusSrcAlpha
 
         CGPROGRAM
@@ -48,6 +48,7 @@ Shader "Custom/BothFaceRender"
         {
             // Albedo comes from a texture tinted by color
             fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
+            clip(c.a - 0.001);
             o.Albedo = c.rgb;
             // Metallic and smoothness come from slider variables
             o.Metallic = _Metallic;
