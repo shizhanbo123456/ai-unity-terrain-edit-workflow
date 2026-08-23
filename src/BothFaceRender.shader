@@ -19,9 +19,10 @@ Shader "Custom/BothFaceRender"
         LOD 200
         Cull Off
         ZWrite Off
+        Blend SrcAlpha OneMinusSrcAlpha
 
         CGPROGRAM
-        // Physically based Standard lighting model, and enable shadows on all light types
+        // 双面透明渲染；不生成或接收阴影。
         #pragma surface surf Standard alpha:fade noshadow
 
         // Use shader model 3.0 target, to get nicer looking lighting
