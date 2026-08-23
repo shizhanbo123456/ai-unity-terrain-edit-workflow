@@ -13,8 +13,6 @@ Shader "Custom/BothFaceRender"
         {
             "Queue"="Transparent"
             "RenderType"="Transparent"
-            "IgnoreProjector"="True"
-            "ForceNoShadowCasting"="True"
         }
         LOD 200
         Cull Off
@@ -22,8 +20,8 @@ Shader "Custom/BothFaceRender"
         Blend SrcAlpha OneMinusSrcAlpha
 
         CGPROGRAM
-        // 双面透明渲染；不生成或接收阴影。
-        #pragma surface surf Standard alpha:fade noshadow
+        // Physically based Standard lighting model, with alpha transparency.
+        #pragma surface surf Standard alpha:fade fullforwardshadows
 
         // Use shader model 3.0 target, to get nicer looking lighting
         #pragma target 3.0
@@ -58,5 +56,5 @@ Shader "Custom/BothFaceRender"
         }
         ENDCG
     }
-    FallBack Off
+    FallBack "Diffuse"
 }
