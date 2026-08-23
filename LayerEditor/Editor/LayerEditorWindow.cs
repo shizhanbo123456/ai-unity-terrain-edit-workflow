@@ -1766,6 +1766,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 float size = Mathf.Max(120f, Mathf.Min(position.width * 0.48f, position.height - 90f));
                 Rect mapRect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
                 GUI.DrawTexture(mapRect, _map.Texture, ScaleMode.ScaleToFit, true);
+                DrawRectOutline(mapRect, Color.black, 2f);
                 DrawFixedPointMarkers(mapRect);
             }
             EditorGUILayout.EndVertical();
