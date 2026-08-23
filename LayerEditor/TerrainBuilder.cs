@@ -25,6 +25,9 @@ namespace AiTerrainWorkflow.LayerEditor
         private TerrainPaintProjectSO _config;
         private Terrain _terrain;
 
+        /// <summary>当前这次 Build 的 MapData 内存集合；运行时新计算结果只存放在此处。</summary>
+        public TerrainMapData MapData { get; private set; }
+
         private sealed class ScatterRuntime
         {
             public ScatterConfigSO config;
@@ -66,6 +69,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             _config = projectConfig;
             _terrain = terrain;
+            MapData = TerrainMapData.Load(projectConfig);
 
             ApplyHeight();
             if ((int)applyThrough < (int)TerrainWorkflowStage.TextureEdit) return;
@@ -95,9 +99,9 @@ namespace AiTerrainWorkflow.LayerEditor
             var terrain = _terrain;
 
             // 缓存 MapData（层 ID / 道路 / 离路距离）
-            _layerMapData = projectConfig.ReadMap("layerMap");
-            _roadData = projectConfig.ReadMap("road");
-            _offRoadData = projectConfig.ReadMap("offRoad");
+            _layerMapData = MapData.Get("layerMap");
+            _roadData = MapData.Get("road");
+            _offRoadData = MapData.Get("offRoad");
             _dataReady = _layerMapData != null && _roadData != null && _offRoadData != null;
             _dataWarned = false;
 

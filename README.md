@@ -11,7 +11,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 原则 | 说明 |
 |---|---|
 | 配置驱动 | 工作流最终产出 = **引用美术/模型素材的配置数据**（主配置 `TerrainPaintProjectSO`）；中间图（layerMap/RGB/高度预览）仅为编辑期可视化，**不再是交付物** |
-| 数据优先 | 栅格数据一律以 `float[][]` 为最终形态，存为 CSV txt（MapData）；**运行时只读 float[][]，图片仅供人看** |
+| 数据优先 | 栅格数据一律以 `float[][]` 为最终形态；编辑器计算结果持久化为 CSV txt（MapData），运行时计算结果只留在本次构建的内存中；图片仅供人看 |
 | 单一生成核心 | 完整生成算法与 `TerrainBuilder` 均为运行时代码；编辑器预览和 Player 构建必须调用同一套公开生成入口，不维护两份算法 |
 | 编辑器只做适配 | `Editor` 目录只负责配置编辑、资产读写、撤销、按钮与可视化预览；不容纳实际地形生成规则 |
 | 构建端分离 | 运行时/编辑器都靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/散布/摆件/定点） |
@@ -173,11 +173,13 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 ## MapData 存储层 [已完成]
 
+- 生命周期：编辑器中计算的 MapData 通过 `WriteMap` 长期保存；Player 中新计算的 MapData 只写入当次 `TerrainBuilder.MapData`（`TerrainMapData`），不写磁盘、不修改配置资产。
 - 接口（主配置 `TerrainPaintProjectSO` 上）：`ReadMap(key)→float[][]` / `WriteMap(key, float[][])` / `DeleteMap(key)` / `HasMap(key)`。
 - 文件：`Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs/<配置>/MapData/{key}.txt`。
 - 格式：CSV，手写解析（无第三方库）。首行元数据头 `#key=...;w=...;h=...`（解析器跳过 `#` 行）；数值 **F3 三位小数**、InvariantCulture（跨平台一致）。
 - 引用：主配置持 `mapDataFiles`（`key + TextAsset`），随 SO 打进构建；**编辑器读直接读磁盘文件（保最新）**，**运行时走 TextAsset**。
 - 辅助：`MapDataTextureUtils`（float[][]↔Texture2D，仅编辑期显示/采集）。
+- 预览：「工作流配置 → MapData 预览」枚举当前配置已持久化的全部 MapData，每项独立归一化为灰度图并显示 key、分辨率与 min/max。
 - key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。散布位置**不存储**（构建时按生成组与区块动态生成，见阶段 5）。
 
 ## 目录结构

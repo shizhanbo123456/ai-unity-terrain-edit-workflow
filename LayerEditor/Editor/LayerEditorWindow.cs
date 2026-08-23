@@ -10,7 +10,7 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
     /// 顶层八个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 散布编辑 / 摆件编辑 / 定点编辑 / 应用。
-    /// 「工作流配置」整页显示：工作流图（层次图/RGB 图）、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）。
+    /// 「工作流配置」整页显示：全部已持久化 MapData 预览、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）。
     /// 「散布编辑」按多个 ScatterConfigSO 生成组配置均匀散布规则。
     /// 其余编辑子界面为左右分栏布局：
     ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠），整体共同滚动
@@ -96,6 +96,11 @@ namespace AiTerrainWorkflow.LayerEditor
         private float _lastHeightMin;
         private float _lastHeightMax;
         private float _lastRMax;
+        private readonly Dictionary<string, Texture2D> _mapDataPreviews =
+            new Dictionary<string, Texture2D>();
+        private readonly Dictionary<string, Vector2> _mapDataPreviewRanges =
+            new Dictionary<string, Vector2>();
+        private TerrainPaintProjectSO _mapDataPreviewProject;
 
         private bool HasProject => _project != null;
 
@@ -146,12 +151,14 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 EnsurePaintMap();
                 LoadResultPreview();
+                RebuildMapDataPreviews();
             }
         }
 
         private void OnDisable()
         {
             SavePaintMapIfAny();
+            ClearMapDataPreviews();
         }
 
         // ---------- 主布局 ----------
@@ -243,6 +250,7 @@ namespace AiTerrainWorkflow.LayerEditor
             if (newProject != _project)
             {
                 SavePaintMapIfAny();
+                ClearMapDataPreviews();
                 _project = newProject;
                 _resultPreview = null;
                 _heightPreview = null;
@@ -252,6 +260,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 {
                     EnsurePaintMap();
                     LoadResultPreview();
+                    RebuildMapDataPreviews();
                 }
                 RememberProject();
                 Repaint();
@@ -268,6 +277,8 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 SavePaintMapIfAny();
                 _mainTab = (MainTab)newMain;
+                if (_mainTab == MainTab.WorkflowConfig)
+                    RebuildMapDataPreviews();
             }
             EditorGUILayout.EndHorizontal();
 
@@ -403,23 +414,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.Space(6);
 
-            // 工作流图预览（数据来自 MapData，图片仅用于查看）
-            EditorGUILayout.LabelField("工作流图预览（仅显示）", EditorStyles.boldLabel);
-            EnsurePaintMap();
-            if (_map != null)
-            {
-                float pw = Mathf.Min(220f, position.width - 60f);
-                float ph = pw * _map.Height / (float)Mathf.Max(1, _map.Width);
-                GUILayout.Label(_map.Texture, GUILayout.Width(pw), GUILayout.Height(ph));
-            }
-            if (_resultPreview == null)
-                LoadResultPreview();
-            if (_resultPreview != null)
-            {
-                float pw = Mathf.Min(220f, position.width - 60f);
-                float ph = pw * _resultPreview.height / (float)Mathf.Max(1, _resultPreview.width);
-                GUILayout.Label(_resultPreview, GUILayout.Width(pw), GUILayout.Height(ph));
-            }
+            DrawMapDataPreviews();
 
             EditorGUILayout.Space(8);
 
@@ -472,6 +467,70 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
+        }
+
+        private void DrawMapDataPreviews()
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("MapData 预览", EditorStyles.boldLabel);
+            if (GUILayout.Button("刷新", GUILayout.Width(64f)))
+                RebuildMapDataPreviews();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.HelpBox(
+                "显示当前配置已持久化的全部 MapData。每项按自身最小值和最大值独立归一化为灰度图，仅用于查看。",
+                MessageType.None);
+
+            if (_mapDataPreviewProject != _project)
+                RebuildMapDataPreviews();
+            if (_mapDataPreviews.Count == 0)
+            {
+                EditorGUILayout.LabelField("尚未生成 MapData。", EditorStyles.miniLabel);
+                return;
+            }
+
+            var keys = new List<string>(_mapDataPreviews.Keys);
+            keys.Sort(System.StringComparer.Ordinal);
+            foreach (string key in keys)
+            {
+                Texture2D texture = _mapDataPreviews[key];
+                if (texture == null) continue;
+                Vector2 range = _mapDataPreviewRanges[key];
+                EditorGUILayout.LabelField(
+                    $"{key}  {texture.width}×{texture.height}  [{range.x:F3}, {range.y:F3}]",
+                    EditorStyles.miniBoldLabel);
+                float width = Mathf.Min(220f, position.width - 60f);
+                float height = width * texture.height / Mathf.Max(1f, texture.width);
+                GUILayout.Label(texture, GUILayout.Width(width), GUILayout.Height(height));
+                EditorGUILayout.Space(4f);
+            }
+        }
+
+        private void RebuildMapDataPreviews()
+        {
+            ClearMapDataPreviews();
+            _mapDataPreviewProject = _project;
+            if (_project == null || _project.mapDataFiles == null) return;
+
+            var seen = new HashSet<string>();
+            foreach (var entry in _project.mapDataFiles)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.key) || !seen.Add(entry.key)) continue;
+                float[][] data = _project.ReadMap(entry.key);
+                Texture2D texture = MapDataTextureUtils.ToTexture(data, out float min, out float max);
+                if (texture == null) continue;
+                _mapDataPreviews.Add(entry.key, texture);
+                _mapDataPreviewRanges.Add(entry.key, new Vector2(min, max));
+            }
+        }
+
+        private void ClearMapDataPreviews()
+        {
+            foreach (Texture2D texture in _mapDataPreviews.Values)
+                if (texture != null) DestroyImmediate(texture);
+            _mapDataPreviews.Clear();
+            _mapDataPreviewRanges.Clear();
+            _mapDataPreviewProject = null;
         }
 
         private void DrawApplyView()
@@ -1029,6 +1088,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 _heightPreview = null;
                 _lastHeightMin = 0f;
                 _lastHeightMax = 0f;
+                _project.RefreshMapDataRefs(true);
+                RebuildMapDataPreviews();
                 EditorUtility.SetDirty(_project);
             }
             EditorGUILayout.EndHorizontal();
@@ -1077,6 +1138,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 Object.DestroyImmediate(_heightPreview);
             _heightPreview = MapDataTextureUtils.ToTexture(data, out _lastHeightMin, out _lastHeightMax);
             _project.RefreshMapDataRefs(true);
+            RebuildMapDataPreviews();
             EditorUtility.SetDirty(_project);
             Debug.Log($"[Terrain Paint Workflow] 高度数据烘焙完成，已写入 MapData/height.txt，范围 [{_lastHeightMin:F2}, {_lastHeightMax:F2}]");
             Repaint();
@@ -1449,6 +1511,7 @@ namespace AiTerrainWorkflow.LayerEditor
             _project.WriteMap("offRoad", CsvArrayCodec.ToJagged(
                 TerrainRoadGen.ComputeOffRoad(ids, bArr, w, h, _project.config.worldPerPixel), w, h));
             _project.RefreshMapDataRefs(true);
+            RebuildMapDataPreviews();
             EditorUtility.SetDirty(_project);
 
             if (_resultPreview != null)
