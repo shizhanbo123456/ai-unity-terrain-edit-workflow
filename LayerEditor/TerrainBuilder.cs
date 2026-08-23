@@ -9,7 +9,8 @@ namespace AiTerrainWorkflow.LayerEditor
     /// （高度 / 贴图 / 散布 / 摆件 / 定点，详见 README「完整生成逻辑伪代码」）。
     ///
     /// 已实现高度、地形贴图、散布和定点构建。散布在 Build 时预计算全地形各区块的位置列表，
-    /// 再由 <see cref="SetCameraPosition"/> 驱动对象池的动态生成与回收。摆件构建仍待实现。
+    /// 再由 <see cref="SetCameraPosition"/> 驱动对象池的动态生成与回收。摆件使用多候选择优、
+    /// Bounds 足迹与间距约束生成兼顾自然感和可控性的静态布局。
     ///
     /// 对象池约定：
     ///   - 每个散布 Prefab 分配唯一 key（= 组内 Prefab 池索引），物体 name = key.ToString()，
@@ -48,8 +49,18 @@ namespace AiTerrainWorkflow.LayerEditor
                 new Dictionary<Vector2Int, List<Placement>>();
         }
 
+        private sealed class PropPlacement
+        {
+            public GameObject prefab;
+            public Vector2Int pixel;
+            public Vector2 worldXZ;
+            public float yaw;
+            public float radius;
+        }
+
         private readonly List<ScatterRuntime> _scatterRuntimes = new List<ScatterRuntime>();
         private Transform _poolRoot;
+        private Transform _propRoot;
         private Transform _fixedRoot;
 
         // MapData 缓存（Build 时读取一次；高度以 Terrain 为准，不读 height）
@@ -253,9 +264,378 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        /// <summary>应用摆件；具体实现后续补充。</summary>
+        /// <summary>按配置的值域、分布、Bounds 间距和梯度朝向生成静态摆件。</summary>
         private void ApplyProps()
         {
+            ClearGeneratedRoot(ref _propRoot);
+            var rootObject = new GameObject("_TerrainBuilderProps");
+            rootObject.transform.SetParent(transform, false);
+            _propRoot = rootObject.transform;
+
+            float[][] layerMap = MapData.Get("layerMap");
+            if (!TryGetMapSize(layerMap, out int mapW, out int mapH))
+            {
+                Debug.LogWarning("[TerrainBuilder] layerMap 缺失，跳过摆件生成。");
+                return;
+            }
+            float[][] height = MapData.Get("height");
+            float[][] distance = MapData.Get("distance");
+            float[][] offRoad = MapData.Get("offRoad");
+            Vector3 terrainSize = _terrain.terrainData.size;
+            var pixelWorldSize = new Vector2(
+                terrainSize.x / Mathf.Max(1, mapW - 1),
+                terrainSize.z / Mathf.Max(1, mapH - 1));
+
+            for (int groupIndex = 0; groupIndex < _config.propGroups.Count; groupIndex++)
+            {
+                PropConfigSO group = _config.propGroups[groupIndex];
+                if (group == null || group.prefabs == null || group.prefabs.Count == 0)
+                    continue;
+                float[][] basis = group.arrangementBasis == PropArrangementBasis.Distance
+                    ? distance
+                    : group.arrangementBasis == PropArrangementBasis.Height ? height : offRoad;
+                if (!HasMapSize(basis, mapW, mapH))
+                {
+                    Debug.LogWarning($"[TerrainBuilder] 摆件组 {group.groupName} 缺少 {group.arrangementBasis} 数据，已跳过。");
+                    continue;
+                }
+                BuildPropGroup(group, groupIndex, layerMap, basis, mapW, mapH, pixelWorldSize);
+            }
+        }
+
+        private void BuildPropGroup(
+            PropConfigSO group,
+            int groupIndex,
+            float[][] layerMap,
+            float[][] basis,
+            int mapW,
+            int mapH,
+            Vector2 pixelWorldSize)
+        {
+            var validPixels = new List<Vector2Int>();
+            for (int z = 0; z < mapH; z++)
+            for (int x = 0; x < mapW; x++)
+            {
+                int layerIndex = Mathf.Max(0, Mathf.RoundToInt(layerMap[z][x]));
+                if (layerIndex >= TerrainPaintProjectSO.MaxLayerCount) continue;
+                var flag = (TerrainWorkflowLayerMask)(1 << layerIndex);
+                if ((group.targetLayers & flag) == 0) continue;
+                float value = basis[z][x];
+                if (value < Mathf.Min(group.arrangementRange.x, group.arrangementRange.y) ||
+                    value > Mathf.Max(group.arrangementRange.x, group.arrangementRange.y)) continue;
+                validPixels.Add(new Vector2Int(x, z));
+            }
+            if (validPixels.Count == 0) return;
+            var validPixelSet = new HashSet<Vector2Int>(validPixels);
+
+            float validArea = validPixels.Count * pixelWorldSize.x * pixelWorldSize.y;
+            int requestedCount = Mathf.Max(0, Mathf.RoundToInt(validArea * group.expectedDensity));
+            List<int> prefabSchedule = BuildPropPrefabSchedule(group, requestedCount,
+                new System.Random(_config.propSeed ^ (groupIndex * 83492791)), out int minimumTotal);
+            if (prefabSchedule.Count == 0) return;
+
+            var rng = new System.Random(_config.propSeed ^ (groupIndex * 83492791));
+            var placed = new List<PropPlacement>();
+            int scheduleIndex = 0;
+            int failedBatches = 0;
+            int proposalCount = Mathf.Max(1, group.batchSize.y);
+            int requiredCount = Mathf.Clamp(group.batchSize.x, 1, proposalCount);
+
+            while (scheduleIndex < prefabSchedule.Count && failedBatches < Mathf.Max(1, group.maxFailedAttempts))
+            {
+                var acceptedBatch = new List<PropPlacement>();
+                int remaining = prefabSchedule.Count - scheduleIndex;
+                bool placingMinimum = scheduleIndex < minimumTotal;
+                int proposals = placingMinimum ? 1 : Mathf.Min(proposalCount, remaining);
+                for (int i = 0; i < proposals; i++)
+                {
+                    int prefabIndex = prefabSchedule[scheduleIndex + i];
+                    GameObject prefab = group.prefabs[prefabIndex].prefab;
+                    if (prefab == null) continue;
+                    PropPlacement proposal = FindVisualPropCandidate(
+                        group, prefab, validPixels, placed, acceptedBatch,
+                        validPixelSet, layerMap, basis, mapW, mapH, pixelWorldSize, rng);
+                    if (proposal != null) acceptedBatch.Add(proposal);
+                }
+
+                int batchRequired = placingMinimum ? 1 : Mathf.Min(requiredCount, proposals);
+                if (acceptedBatch.Count < batchRequired)
+                {
+                    failedBatches++;
+                    continue;
+                }
+
+                foreach (PropPlacement placement in acceptedBatch)
+                {
+                    InstantiateProp(placement);
+                    placed.Add(placement);
+                }
+                scheduleIndex += proposals;
+                failedBatches = 0;
+            }
+        }
+
+        private List<int> BuildPropPrefabSchedule(
+            PropConfigSO group, int requestedCount, System.Random rng, out int minimumTotal)
+        {
+            var schedule = new List<int>();
+            minimumTotal = 0;
+            for (int i = 0; i < group.prefabs.Count; i++)
+            {
+                PropPrefabEntry entry = group.prefabs[i];
+                if (entry == null || entry.prefab == null) continue;
+                int minimum = Mathf.Max(0, entry.minimumCount);
+                minimumTotal += minimum;
+                for (int n = 0; n < minimum; n++) schedule.Add(i);
+            }
+            int target = Mathf.Max(requestedCount, minimumTotal);
+            while (schedule.Count < target)
+            {
+                int picked = PickWeightedPropPrefab(group, rng);
+                if (picked < 0) break;
+                schedule.Add(picked);
+            }
+            return schedule;
+        }
+
+        private static int PickWeightedPropPrefab(PropConfigSO group, System.Random rng)
+        {
+            int total = 0;
+            foreach (PropPrefabEntry entry in group.prefabs)
+                if (entry != null && entry.prefab != null && entry.weight > 0) total += entry.weight;
+            if (total <= 0) return -1;
+            int value = rng.Next(total);
+            for (int i = 0; i < group.prefabs.Count; i++)
+            {
+                PropPrefabEntry entry = group.prefabs[i];
+                if (entry == null || entry.prefab == null || entry.weight <= 0) continue;
+                if (value < entry.weight) return i;
+                value -= entry.weight;
+            }
+            return -1;
+        }
+
+        private PropPlacement FindVisualPropCandidate(
+            PropConfigSO group,
+            GameObject prefab,
+            List<Vector2Int> validPixels,
+            List<PropPlacement> placed,
+            List<PropPlacement> acceptedBatch,
+            HashSet<Vector2Int> validPixelSet,
+            float[][] layerMap,
+            float[][] basis,
+            int mapW,
+            int mapH,
+            Vector2 pixelWorldSize,
+            System.Random rng)
+        {
+            const int CandidateTrials = 16;
+            PropPlacement best = null;
+            float bestScore = float.NegativeInfinity;
+            for (int trial = 0; trial < CandidateTrials; trial++)
+            {
+                Vector2Int pixel = SelectPropPixel(
+                    group.distributionMode, validPixels, validPixelSet, placed, pixelWorldSize, rng);
+                float yaw = CalculatePropYaw(group.rotationMode, pixel, basis, mapW, mapH, pixelWorldSize, rng);
+                float radius = GetPrefabHorizontalRadius(prefab);
+                Vector2 worldXZ = PixelToWorldXZ(pixel.x, pixel.y);
+                var candidate = new PropPlacement
+                {
+                    prefab = prefab,
+                    pixel = pixel,
+                    worldXZ = worldXZ,
+                    yaw = yaw,
+                    radius = radius,
+                };
+                if (!PassesPropFootprint(
+                        candidate, group, layerMap, basis, mapW, mapH, pixelWorldSize)) continue;
+                float clearance = MinimumPropClearance(candidate, placed, acceptedBatch, group.distributionSpacing);
+                if (clearance < 0f) continue;
+
+                // 多候选择优产生蓝噪声式空隙；低频噪声轻微调制，避免过于规则。
+                float visualNoise = Mathf.PerlinNoise(
+                    worldXZ.x * 0.037f + _config.propSeed * 0.11f,
+                    worldXZ.y * 0.037f + _config.propSeed * 0.19f);
+                float score = Mathf.Min(clearance, radius * 6f) + visualNoise * radius * 0.75f;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = candidate;
+                }
+            }
+            return best;
+        }
+
+        private Vector2Int SelectPropPixel(
+            PropDistributionMode mode,
+            List<Vector2Int> validPixels,
+            HashSet<Vector2Int> validPixelSet,
+            List<PropPlacement> placed,
+            Vector2 pixelWorldSize,
+            System.Random rng)
+        {
+            if (placed.Count == 0 || mode == PropDistributionMode.Scatter)
+                return validPixels[rng.Next(validPixels.Count)];
+
+            PropPlacement anchor = placed[rng.Next(placed.Count)];
+            Vector2 target;
+            if (mode == PropDistributionMode.Cluster)
+            {
+                double angle = rng.NextDouble() * System.Math.PI * 2.0;
+                float distance = anchor.radius * Mathf.Lerp(1.5f, 5f, (float)rng.NextDouble());
+                target = anchor.worldXZ + new Vector2(
+                    (float)System.Math.Cos(angle) * distance,
+                    (float)System.Math.Sin(angle) * distance);
+            }
+            else
+            {
+                float distance = anchor.radius * Mathf.Lerp(1.8f, 3.5f, (float)rng.NextDouble());
+                float radians = anchor.yaw * Mathf.Deg2Rad;
+                target = anchor.worldXZ + new Vector2(Mathf.Sin(radians), Mathf.Cos(radians)) * distance;
+            }
+
+            Vector3 terrainPosition = _terrain.transform.position;
+            var targetPixel = new Vector2Int(
+                Mathf.RoundToInt((target.x - terrainPosition.x) / pixelWorldSize.x),
+                Mathf.RoundToInt((target.y - terrainPosition.z) / pixelWorldSize.y));
+            if (validPixelSet.Contains(targetPixel)) return targetPixel;
+
+            Vector2Int best = validPixels[rng.Next(validPixels.Count)];
+            float bestDistance = float.PositiveInfinity;
+            int searchRadius = Mathf.Clamp(
+                Mathf.CeilToInt(anchor.radius * 6f /
+                    Mathf.Max(0.0001f, Mathf.Min(pixelWorldSize.x, pixelWorldSize.y))), 4, 64);
+            for (int dz = -searchRadius; dz <= searchRadius; dz++)
+            for (int dx = -searchRadius; dx <= searchRadius; dx++)
+            {
+                var candidate = new Vector2Int(targetPixel.x + dx, targetPixel.y + dz);
+                if (!validPixelSet.Contains(candidate)) continue;
+                Vector2 world = PixelToWorldXZ(candidate.x, candidate.y);
+                float distance = (world - target).sqrMagnitude;
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+            return best;
+        }
+
+        private static float CalculatePropYaw(
+            PropRotationMode mode,
+            Vector2Int pixel,
+            float[][] basis,
+            int mapW,
+            int mapH,
+            Vector2 pixelWorldSize,
+            System.Random rng)
+        {
+            if (mode == PropRotationMode.Random)
+                return (float)rng.NextDouble() * 360f;
+            int x0 = Mathf.Max(0, pixel.x - 1), x1 = Mathf.Min(mapW - 1, pixel.x + 1);
+            int z0 = Mathf.Max(0, pixel.y - 1), z1 = Mathf.Min(mapH - 1, pixel.y + 1);
+            float gradientX = (basis[pixel.y][x1] - basis[pixel.y][x0]) /
+                              Mathf.Max(0.0001f, (x1 - x0) * pixelWorldSize.x);
+            float gradientZ = (basis[z1][pixel.x] - basis[z0][pixel.x]) /
+                              Mathf.Max(0.0001f, (z1 - z0) * pixelWorldSize.y);
+            Vector2 direction = new Vector2(gradientX, gradientZ);
+            if (direction.sqrMagnitude < 0.000001f)
+                return (float)rng.NextDouble() * 360f;
+            if (mode == PropRotationMode.TowardLowGradient) direction = -direction;
+            if (mode == PropRotationMode.AlongContour)
+                direction = new Vector2(-direction.y, direction.x);
+            return Mathf.Atan2(direction.x, direction.y) * Mathf.Rad2Deg;
+        }
+
+        private static float GetPrefabHorizontalRadius(GameObject prefab)
+        {
+            PrefabStructureInfo info = prefab != null ? prefab.GetComponent<PrefabStructureInfo>() : null;
+            if (info == null) return 0.5f;
+            float x = Mathf.Max(Mathf.Abs(info.boundsX.x), Mathf.Abs(info.boundsX.y));
+            float z = Mathf.Max(Mathf.Abs(info.boundsZ.x), Mathf.Abs(info.boundsZ.y));
+            return Mathf.Max(0.05f, Mathf.Sqrt(x * x + z * z));
+        }
+
+        private bool PassesPropFootprint(
+            PropPlacement candidate,
+            PropConfigSO group,
+            float[][] layerMap,
+            float[][] basis,
+            int mapW,
+            int mapH,
+            Vector2 pixelWorldSize)
+        {
+            PrefabStructureInfo info = candidate.prefab.GetComponent<PrefabStructureInfo>();
+            float minX = info != null ? info.boundsX.x : -candidate.radius;
+            float maxX = info != null ? info.boundsX.y : candidate.radius;
+            float minZ = info != null ? info.boundsZ.x : -candidate.radius;
+            float maxZ = info != null ? info.boundsZ.y : candidate.radius;
+            Quaternion rotation = Quaternion.Euler(0f, candidate.yaw, 0f);
+            int valid = 0;
+            const int samplesPerAxis = 3;
+            for (int iz = 0; iz < samplesPerAxis; iz++)
+            for (int ix = 0; ix < samplesPerAxis; ix++)
+            {
+                float tx = ix / (samplesPerAxis - 1f);
+                float tz = iz / (samplesPerAxis - 1f);
+                Vector3 offset = rotation * new Vector3(
+                    Mathf.Lerp(minX, maxX, tx), 0f, Mathf.Lerp(minZ, maxZ, tz));
+                Vector2 sampleWorld = candidate.worldXZ + new Vector2(offset.x, offset.z);
+                int px = Mathf.RoundToInt(
+                    (sampleWorld.x - _terrain.transform.position.x) / pixelWorldSize.x);
+                int pz = Mathf.RoundToInt(
+                    (sampleWorld.y - _terrain.transform.position.z) / pixelWorldSize.y);
+                if (px < 0 || px >= mapW || pz < 0 || pz >= mapH) continue;
+                int layerIndex = Mathf.Max(0, Mathf.RoundToInt(layerMap[pz][px]));
+                if (layerIndex >= TerrainPaintProjectSO.MaxLayerCount) continue;
+                var flag = (TerrainWorkflowLayerMask)(1 << layerIndex);
+                float value = basis[pz][px];
+                if ((group.targetLayers & flag) != 0 &&
+                    value >= Mathf.Min(group.arrangementRange.x, group.arrangementRange.y) &&
+                    value <= Mathf.Max(group.arrangementRange.x, group.arrangementRange.y))
+                    valid++;
+            }
+            float outsideRatio = 1f - valid / (float)(samplesPerAxis * samplesPerAxis);
+            return outsideRatio <= Mathf.Clamp01(group.outOfBoundsTolerance);
+        }
+
+        private static float MinimumPropClearance(
+            PropPlacement candidate,
+            List<PropPlacement> placed,
+            List<PropPlacement> acceptedBatch,
+            float spacing)
+        {
+            float minimum = float.PositiveInfinity;
+            for (int i = 0; i < placed.Count; i++)
+                minimum = Mathf.Min(minimum, PropClearance(candidate, placed[i], spacing));
+            for (int i = 0; i < acceptedBatch.Count; i++)
+                minimum = Mathf.Min(minimum, PropClearance(candidate, acceptedBatch[i], spacing));
+            return float.IsPositiveInfinity(minimum) ? candidate.radius * 8f : minimum;
+        }
+
+        private static float PropClearance(PropPlacement a, PropPlacement b, float spacing)
+        {
+            return Vector2.Distance(a.worldXZ, b.worldXZ) - a.radius - b.radius - spacing;
+        }
+
+        private void InstantiateProp(PropPlacement placement)
+        {
+            Quaternion rotation = Quaternion.Euler(0f, placement.yaw, 0f);
+            GameObject instance = Instantiate(placement.prefab, _propRoot);
+            instance.transform.rotation = rotation;
+            instance.transform.localScale = Vector3.one;
+            float worldY = SamplePlacementHeight(
+                placement.prefab, placement.worldXZ.x, placement.worldXZ.y, rotation, 1f);
+            instance.transform.position = new Vector3(
+                placement.worldXZ.x, worldY, placement.worldXZ.y);
+        }
+
+        private Vector2 PixelToWorldXZ(int px, int pz)
+        {
+            Vector3 terrainPosition = _terrain.transform.position;
+            return new Vector2(
+                terrainPosition.x + px * _wppX,
+                terrainPosition.z + pz * _wppZ);
         }
 
         /// <summary>按归一化 X/Z、统一旋转和缩放实例化定点物体。</summary>
