@@ -1240,11 +1240,53 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 _map = new LayerMap(1, 1);
                 _map.LoadFromIdArray(data, _project.layers);
+                MigrateLegacyLayerMapToPaintOperations(data);
             }
             else
             {
                 int res = Mathf.Clamp(_project.mapResolution, 128, 1024);
                 _map = new LayerMap(res, res);
+            }
+        }
+
+        private void MigrateLegacyLayerMapToPaintOperations(float[][] layerIds)
+        {
+            if (_project.paintOperations.Count > 0)
+                return;
+
+            for (int y = 0; y < layerIds.Length; y++)
+            {
+                float[] row = layerIds[y];
+                if (row == null)
+                    continue;
+                int x = 0;
+                while (x < row.Length)
+                {
+                    int layerIndex = Mathf.RoundToInt(row[x]);
+                    if (layerIndex <= 0 || layerIndex >= _project.layers.Count)
+                    {
+                        x++;
+                        continue;
+                    }
+
+                    int startX = x++;
+                    while (x < row.Length && Mathf.RoundToInt(row[x]) == layerIndex)
+                        x++;
+                    _project.paintOperations.Add(new LayerPaintOperation
+                    {
+                        type = LayerPaintOperationType.Rectangle,
+                        pointA = new Vector2Int(startX, y),
+                        pointB = new Vector2Int(x - 1, y),
+                        layerIndex = layerIndex,
+                    });
+                }
+            }
+
+            if (_project.paintOperations.Count > 0)
+            {
+                EditorUtility.SetDirty(_project);
+                Debug.Log($"[Terrain Paint Workflow] 已将旧 layerMap 迁移为 " +
+                          $"{_project.paintOperations.Count} 条区域绘画操作");
             }
         }
 
