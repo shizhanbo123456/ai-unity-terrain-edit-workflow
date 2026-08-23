@@ -25,18 +25,19 @@ namespace AiTerrainWorkflow.LayerEditor
         private TerrainPaintProjectSO _config;
         private Terrain _terrain;
 
-        // 区块管理器（树木 / 细节）
-        private ChunkUpdateManager _treeChunks;
-        private ChunkUpdateManager _detailChunks;
+        private sealed class ScatterRuntime
+        {
+            public ScatterConfigSO config;
+            public ChunkUpdateManager chunks;
+            public int seed;
+            public readonly Dictionary<int, ObjectPool<GameObject>> pools = new Dictionary<int, ObjectPool<GameObject>>();
+            public readonly List<int> prefabKeys = new List<int>();
+            public readonly Dictionary<Vector2Int, List<GameObject>> objectsByChunk =
+                new Dictionary<Vector2Int, List<GameObject>>();
+        }
 
-        // 对象池（key 自增；物体 name = key）
-        private readonly Dictionary<int, ObjectPool<GameObject>> _treePools = new Dictionary<int, ObjectPool<GameObject>>();
-        private readonly Dictionary<int, ObjectPool<GameObject>> _detailPools = new Dictionary<int, ObjectPool<GameObject>>();
+        private readonly List<ScatterRuntime> _scatterRuntimes = new List<ScatterRuntime>();
         private Transform _poolRoot;
-
-        // 区块 → 活跃物体列表（回收时按区块整体 Release）
-        private readonly Dictionary<Vector2Int, List<GameObject>> _treeObjectsByChunk = new Dictionary<Vector2Int, List<GameObject>>();
-        private readonly Dictionary<Vector2Int, List<GameObject>> _detailObjectsByChunk = new Dictionary<Vector2Int, List<GameObject>>();
 
         // MapData 缓存（Build 时读取一次；高度以 Terrain 为准，不读 height）
         private float[][] _layerMapData;
@@ -54,7 +55,7 @@ namespace AiTerrainWorkflow.LayerEditor
         /// 其余构建步骤（PrepareTerrain / ApplyHeight / ApplyAlphamap / PlaceProps / PostProcess）后续实现。
         /// 注意：当前实现假定单次 Build；重复 Build 需先自行回收全部已生成物体。
         /// </summary>
-        public void Build(TerrainPaintProjectSO projectConfig, Terrain terrain)
+        public void Build(TerrainPaintProjectSO projectConfig, Terrain terrain, TerrainWorkflowStage applyThrough)
         {
             if (projectConfig == null || terrain == null)
             {
@@ -65,6 +66,33 @@ namespace AiTerrainWorkflow.LayerEditor
             _config = projectConfig;
             _terrain = terrain;
 
+            ApplyHeight();
+            if ((int)applyThrough < (int)TerrainWorkflowStage.TextureEdit) return;
+            ApplyTexture();
+            if ((int)applyThrough < (int)TerrainWorkflowStage.ScatterEdit) return;
+            ApplyScatter();
+            if ((int)applyThrough < (int)TerrainWorkflowStage.PropEdit) return;
+            ApplyProps();
+            if ((int)applyThrough < (int)TerrainWorkflowStage.FixedPointEdit) return;
+            ApplyFixedPoints();
+        }
+
+        /// <summary>应用高度数据；具体实现后续补充。</summary>
+        private void ApplyHeight()
+        {
+        }
+
+        /// <summary>应用地形贴图；具体实现后续补充。</summary>
+        private void ApplyTexture()
+        {
+        }
+
+        /// <summary>初始化散布阶段当前已有的树木/细节流式生成能力。</summary>
+        private void ApplyScatter()
+        {
+            var projectConfig = _config;
+            var terrain = _terrain;
+
             // 缓存 MapData（层 ID / 道路 / 离路距离）
             _layerMapData = projectConfig.ReadMap("layerMap");
             _roadData = projectConfig.ReadMap("road");
@@ -72,13 +100,10 @@ namespace AiTerrainWorkflow.LayerEditor
             _dataReady = _layerMapData != null && _roadData != null && _offRoadData != null;
             _dataWarned = false;
 
-            int res = Mathf.Max(1, projectConfig.mapResolution);
-            _wppX = terrain.terrainData.size.x / res;
-            _wppZ = terrain.terrainData.size.z / res;
-
-            // 区块管理器：参数从主配置读取
-            _treeChunks = new ChunkUpdateManager(projectConfig.treeChunkSize, projectConfig.treeVisibleDistance);
-            _detailChunks = new ChunkUpdateManager(projectConfig.detailChunkSize, projectConfig.detailVisibleDistance);
+            int mapH = _layerMapData != null ? _layerMapData.Length : projectConfig.mapResolution;
+            int mapW = mapH > 0 && _layerMapData != null ? _layerMapData[0].Length : projectConfig.mapResolution;
+            _wppX = terrain.terrainData.size.x / Mathf.Max(1, mapW - 1);
+            _wppZ = terrain.terrainData.size.z / Mathf.Max(1, mapH - 1);
 
             // 隐藏容器：Hierarchy 面板不显示（子树全部不显示）
             if (_poolRoot == null)
@@ -88,16 +113,36 @@ namespace AiTerrainWorkflow.LayerEditor
                 _poolRoot = go.transform;
             }
 
-            // 对象池：遍历 prefab 池分配自增 key（key = prefab 池索引）
-            _treePools.Clear();
-            for (int i = 0; i < projectConfig.treePrefabs.Count; i++)
-                if (projectConfig.treePrefabs[i] != null)
-                    _treePools[i] = CreatePool(projectConfig.treePrefabs[i], i);
+            _scatterRuntimes.Clear();
+            for (int groupIndex = 0; groupIndex < projectConfig.scatterGroups.Count; groupIndex++)
+            {
+                var group = projectConfig.scatterGroups[groupIndex];
+                if (group == null) continue;
 
-            _detailPools.Clear();
-            for (int i = 0; i < projectConfig.detailPrefabs.Count; i++)
-                if (projectConfig.detailPrefabs[i] != null)
-                    _detailPools[i] = CreatePool(projectConfig.detailPrefabs[i], i);
+                var runtime = new ScatterRuntime
+                {
+                    config = group,
+                    chunks = new ChunkUpdateManager(group.chunkSize, group.visibleDistance),
+                    seed = projectConfig.scatterSeed ^ (groupIndex * 83492791),
+                };
+                for (int prefabIndex = 0; prefabIndex < group.prefabs.Count; prefabIndex++)
+                {
+                    if (group.prefabs[prefabIndex] == null) continue;
+                    runtime.pools[prefabIndex] = CreatePool(group.prefabs[prefabIndex], prefabIndex);
+                    runtime.prefabKeys.Add(prefabIndex);
+                }
+                _scatterRuntimes.Add(runtime);
+            }
+        }
+
+        /// <summary>应用摆件；具体实现后续补充。</summary>
+        private void ApplyProps()
+        {
+        }
+
+        /// <summary>应用定点物体；具体实现后续补充。</summary>
+        private void ApplyFixedPoints()
+        {
         }
 
         private ObjectPool<GameObject> CreatePool(GameObject prefab, int key)
@@ -122,37 +167,38 @@ namespace AiTerrainWorkflow.LayerEditor
         /// </summary>
         public void SetCameraPosition(Vector2 pos)
         {
-            if (_treeChunks == null || _detailChunks == null || _config == null || _terrain == null)
+            if (_config == null || _terrain == null)
                 return;
 
-            UpdateChunks(_treeChunks, _treePools, _treeObjectsByChunk, _config.treeSeed, true, pos);
-            UpdateChunks(_detailChunks, _detailPools, _detailObjectsByChunk, _config.detailSeed, false, pos);
+            Vector3 terrainPosition = _terrain.transform.position;
+            var localPos = new Vector2(pos.x - terrainPosition.x, pos.y - terrainPosition.z);
+            foreach (var runtime in _scatterRuntimes)
+                UpdateChunks(runtime, localPos);
         }
 
-        private void UpdateChunks(ChunkUpdateManager mgr, Dictionary<int, ObjectPool<GameObject>> pools,
-            Dictionary<Vector2Int, List<GameObject>> byChunk, int baseSeed, bool isTree, Vector2 pos)
+        private void UpdateChunks(ScatterRuntime runtime, Vector2 pos)
         {
-            mgr.MoveTo(pos, out var active, out var inactive);
+            runtime.chunks.MoveTo(pos, out var active, out var inactive);
 
             // 1) 回收离开范围的区块：按物体名称解析池 key → Release
             foreach (var idx in inactive)
             {
-                if (!byChunk.TryGetValue(idx, out var list)) continue;
+                if (!runtime.objectsByChunk.TryGetValue(idx, out var list)) continue;
                 foreach (var go in list)
                 {
                     if (go == null) continue;
-                    if (int.TryParse(go.name, out int key) && pools.TryGetValue(key, out var pool))
+                    if (int.TryParse(go.name, out int key) && runtime.pools.TryGetValue(key, out var pool))
                         pool.Release(go);
                 }
                 list.Clear();
-                byChunk.Remove(idx);
+                runtime.objectsByChunk.Remove(idx);
             }
 
             // 2) 生成新进入范围的区块（已激活的跳过，不重复生成）
             foreach (var idx in active)
             {
-                if (!byChunk.ContainsKey(idx))
-                    GenerateChunk(mgr, idx, pools, byChunk, baseSeed, isTree);
+                if (!runtime.objectsByChunk.ContainsKey(idx))
+                    GenerateChunk(runtime, idx);
             }
         }
 
@@ -162,9 +208,7 @@ namespace AiTerrainWorkflow.LayerEditor
         /// → 区块 seed = 全局 seed ⊕ 区块 index → 按层密度洗牌取位 → 按权重选原型 → 从对象池取出并摆放
         /// （高度 = Terrain.SampleHeight，位置 = 像素中心 × 实际 worldPerPixel + Terrain 原点）。
         /// </summary>
-        private void GenerateChunk(ChunkUpdateManager mgr, Vector2Int idx,
-            Dictionary<int, ObjectPool<GameObject>> pools,
-            Dictionary<Vector2Int, List<GameObject>> byChunk, int baseSeed, bool isTree)
+        private void GenerateChunk(ScatterRuntime runtime, Vector2Int idx)
         {
             if (!_dataReady)
             {
@@ -176,17 +220,16 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            mgr.GetChunkBounds(idx, out float xMin, out float yMin, out float xMax, out float yMax);
-            Vector3 tPos = _terrain.transform.position;
+            runtime.chunks.GetChunkBounds(idx, out float xMin, out float yMin, out float xMax, out float yMax);
             int mapH = _layerMapData.Length;
             int mapW = mapH > 0 ? _layerMapData[0].Length : 0;
             if (mapW <= 0) return;
 
             // 世界范围 → 像素范围（clamp 到 map 内）
-            int pxMin = Mathf.Clamp(Mathf.FloorToInt((xMin - tPos.x) / _wppX), 0, mapW - 1);
-            int pxMax = Mathf.Clamp(Mathf.CeilToInt((xMax - tPos.x) / _wppX) - 1, 0, mapW - 1);
-            int pzMin = Mathf.Clamp(Mathf.FloorToInt((yMin - tPos.z) / _wppZ), 0, mapH - 1);
-            int pzMax = Mathf.Clamp(Mathf.CeilToInt((yMax - tPos.z) / _wppZ) - 1, 0, mapH - 1);
+            int pxMin = Mathf.Clamp(Mathf.FloorToInt(xMin / _wppX), 0, mapW - 1);
+            int pxMax = Mathf.Clamp(Mathf.CeilToInt(xMax / _wppX) - 1, 0, mapW - 1);
+            int pzMin = Mathf.Clamp(Mathf.FloorToInt(yMin / _wppZ), 0, mapH - 1);
+            int pzMax = Mathf.Clamp(Mathf.CeilToInt(yMax / _wppZ) - 1, 0, mapH - 1);
 
             // 收集合法像素：语义层（lid≥1）+ 非道路 + 离路 ≥ 对应 limit
             var layerPixels = new Dictionary<int, List<Vector2Int>>();
@@ -196,48 +239,50 @@ namespace AiTerrainWorkflow.LayerEditor
                 for (int px = pxMin; px <= pxMax; px++)
                 {
                     int lid = Mathf.RoundToInt(row[px]);
-                    if (lid < 1 || lid >= _config.layers.Count || _config.layers[lid] == null)
+                    int layerIndex = lid < 0 ? 0 : lid;
+                    if (layerIndex >= TerrainPaintProjectSO.MaxLayerCount)
                         continue;
+                    var layerFlag = (TerrainWorkflowLayerMask)(1 << layerIndex);
+                    if ((runtime.config.targetLayers & layerFlag) == 0) continue;
                     if (_roadData[pz][px] > 0.5f)
                         continue;
-                    var layer = _config.layers[lid];
-                    float limit = isTree ? layer.treeRoadDistanceLimit : layer.detailRoadDistanceLimit;
-                    if (limit > 0f && _offRoadData[pz][px] < limit)
+                    float offRoad = _offRoadData[pz][px];
+                    if (offRoad < runtime.config.offRoadDistanceRange.x ||
+                        offRoad > runtime.config.offRoadDistanceRange.y)
                         continue;
-                    if (!layerPixels.TryGetValue(lid, out var list))
+                    if (!layerPixels.TryGetValue(layerIndex, out var list))
                     {
                         list = new List<Vector2Int>();
-                        layerPixels[lid] = list;
+                        layerPixels[layerIndex] = list;
                     }
                     list.Add(new Vector2Int(px, pz));
                 }
             }
 
             // 区块 seed：全局 seed ⊕ 区块 index（不同区块不重复、可复现）
-            int chunkSeed = baseSeed ^ (idx.x * 73856093) ^ (idx.y * 19349663);
+            int chunkSeed = runtime.seed ^ (idx.x * 73856093) ^ (idx.y * 19349663);
             var rng = new System.Random(chunkSeed);
             float pixelArea = _wppX * _wppZ;
 
             var placed = new List<GameObject>();
             foreach (var kv in layerPixels)
             {
-                var layer = _config.layers[kv.Key];
                 var pixels = kv.Value;
-                float density = isTree ? layer.treeDensity : layer.detailDensity;
+                float density = runtime.config.density;
                 if (density <= 0f) continue;
                 int count = Mathf.FloorToInt(pixels.Count * pixelArea * density);
                 if (count <= 0) continue;
 
                 Shuffle(pixels, rng); // 洗牌取前 count 个：均匀、无重复
                 int take = Mathf.Min(count, pixels.Count);
-                var weights = isTree ? layer.treeWeights : layer.detailWeights;
-                var scaleRange = isTree ? layer.treeScale : layer.detailScale;
+                var scaleRange = runtime.config.randomScale;
 
                 for (int i = 0; i < take; i++)
                 {
                     var pxp = pixels[i];
-                    int key = PickWeighted(rng, weights);
-                    if (key < 0 || !pools.TryGetValue(key, out var pool))
+                    if (runtime.prefabKeys.Count == 0) continue;
+                    int key = runtime.prefabKeys[rng.Next(runtime.prefabKeys.Count)];
+                    if (!runtime.pools.TryGetValue(key, out var pool))
                         continue;
                     var go = pool.Get();
                     float s = Mathf.Lerp(scaleRange.x, scaleRange.y, (float)rng.NextDouble());
@@ -247,17 +292,16 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
             }
 
-            if (placed.Count > 0)
-                byChunk[idx] = placed;
+            runtime.objectsByChunk[idx] = placed;
         }
 
         /// <summary>像素中心 → 世界坐标；Y = Terrain.SampleHeight（以 Terrain 组件高度为准）。</summary>
         private Vector3 PixelToWorld(int px, int pz)
         {
             Vector3 tPos = _terrain.transform.position;
-            float wx = tPos.x + (px + 0.5f) * _wppX;
-            float wz = tPos.z + (pz + 0.5f) * _wppZ;
-            float wy = _terrain.SampleHeight(new Vector3(wx, 0f, wz));
+            float wx = tPos.x + px * _wppX;
+            float wz = tPos.z + pz * _wppZ;
+            float wy = tPos.y + _terrain.SampleHeight(new Vector3(wx, 0f, wz));
             return new Vector3(wx, wy, wz);
         }
 
@@ -270,22 +314,5 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        /// <summary>按权重随机选原型池 key（= prefab 池索引）；权重全 0 返回 -1。</summary>
-        private static int PickWeighted(System.Random rng, List<int> weights)
-        {
-            if (weights == null) return -1;
-            int total = 0;
-            for (int i = 0; i < weights.Count; i++)
-                if (weights[i] > 0) total += weights[i];
-            if (total <= 0) return -1;
-            int r = rng.Next(total);
-            for (int i = 0; i < weights.Count; i++)
-            {
-                if (weights[i] <= 0) continue;
-                if (r < weights[i]) return i;
-                r -= weights[i];
-            }
-            return -1;
-        }
     }
 }

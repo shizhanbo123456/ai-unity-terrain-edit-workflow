@@ -48,7 +48,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
 | 4 摆件编辑 | 物体库 prefab + 生成组配置 | 生成组规则化摆放（候选点采样 + 距离场值域/目标layer 过滤(越界宽容容错) + 分布间距去重(同批可重叠)）；防重叠在构建期按实际地形尺寸处理、不依赖 MapData | 生成组配置（主配置）+ 物体库 | **[设计已定，待开发]** |
-| 5 散布编辑（树木 + 细节） | layerMap + 树/细节池 + 每层密度/scale/离路限制 | 配置密度/scale/离路限制；**构建时按区块动态生成位置**（树木/细节同构、仅参数不同）；⚠ [TODO] 两配置后续合并 | 每层密度/scale/离路限制（层 Config）；位置不存储 | **[进行中]**（配置编辑可用；生成在 M3） |
+| 5 散布编辑 | layerMap + 多个散布生成组 | 按组配置目标层级、离路范围、密度、缩放、Prefab 池与流式区块参数 | `ScatterConfig/*.asset`；位置不存储 | **[已完成]**（配置编辑 + 分组流式生成） |
 | 7 构建 | 主配置（SO + 全部 MapData） | `TerrainBuilder.Build()`（构建函数单一入口） | 真实 TerrainData + 摆件 GameObject | **[待开发]**（alphamap 算法 **[待设计]**） |
 | 8 运行时 | 主配置（TextAsset → float[][]） | 按需调用 Build()（时机由实际项目定） | 运行时地形 | **[待设计]** |
 
@@ -123,32 +123,19 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 
 **与现有一致性**：seed 全局可复现；高度 = `Terrain.SampleHeight`；位置过滤复用 `layerMap` / `offRoad` / `road` / `height` MapData；实例化复用对象池（小摆件可挂 `ChunkUpdateManager` 流式；大摆件建议构建期一次性实例化，避免墙段等切块断接）。
 
-### 阶段 5 · 散布编辑 [进行中]（树木 + 细节；配置编辑已可用；位置由构建端动态生成）
+### 阶段 5 · 散布编辑 [已完成]
 
-- 树木与细节**同构，仅参数不同**（见下方两块）；两者位置均**不烘焙、不落盘**（LayerConfigSO / MapData 均不存位置列表）。
-
-**树木（tree*）**：
-- 每层配置新增字段（均为**构建时参数**，位置本身不存储）：
-  - `treeDensity`（float，个/平方米）
-  - `treeScale`（Vector2，随机缩放范围 min~max）
-  - `treeRoadDistanceLimit`（float，**米**，默认 3；距最近道路（offRoad）小于该值不生成树木，0 = 不限制）
-- **构建时按区块动态生成**（TerrainBuilder 驱动）：主配置 `treeChunkSize`（区块尺寸）/ `treeVisibleDistance`（可见距离）决定区块划分与激活半径；`SetCameraPosition(Vector2)` 时，区块中心进入可见距离的区块，按该区块内各层掩码 + `treeDensity` 均匀采样位置（区块 seed = 全局 `TreeSeed` ⊕ 区块 index，可复现）→ 过滤 `road >= 0.5`（不能生成在路上）且 `offRoad < treeRoadDistanceLimit`（不能离路太近；limit=0 时不限制）→ 按该层 `treeWeights` 权重随机选原型、scale 在 `treeScale` 内随机 → 从**对象池**实例化 GameObject（name=池 key、`HideInHierarchy` 隐藏；高度 = Terrain.SampleHeight）。区块离开可见距离则整区块物体回收进对象池。**任何时刻只持有当前区块的物体，禁止一次性生成 / 加载全图位置列表**（对接区块管理器）。
-
-**细节（detail*）**：
-- 每层 `detailDensity`（个/平方米）/ `detailScale`（Vector2）/ `detailRoadDistanceLimit`（float，**米**，默认 1，小于树的 treeRoadDistanceLimit；距最近道路小于该值不生成细节，0 = 不限制）。
-- **位置同样不存储、构建时按区块动态生成**（TerrainBuilder 驱动，逻辑同树木）：主配置 `detailChunkSize` / `detailVisibleDistance`；`SetCameraPosition` 时按区块掩码 + `detailDensity` 生成位置 → 过滤 `road >= 0.5` 且 `offRoad < detailRoadDistanceLimit`（limit=0 时不限制）→ 按 `detailWeights` 权重随机选原型 → **对象池实例化**（高度 = Terrain.SampleHeight）；区块离开可见距离则整区块回收。**任何时刻只持有当前区块的物体**。
-
-> 注：**所有 seed 均为全局 seed（无每层 seed）**。散布编辑（树木/细节）位置**不存储**（构建时按区块动态生成）；密度/scale/离路限制/权重存各层 Config，不落 MapData。
-
-> ⚠ **TODO（规划中）**：
-> 1. **合并树木 / 细节编辑配置**：两者仅参数名不同（`tree*` / `detail*`），没有实质差别，后续合并为一套「散布配置」（同一组密度 / scale / 离路限制 / 权重字段 + 物体类型区分），消除重复维护。
-> 2. **新增定点编辑功能**：用于编辑游戏中的**特殊固定结构**（例如双方基地位置、据点等）；这类物体**必须有固定位置 + 固定数量生成**（非随机散布），后续作为独立编辑类型落地。
+- 主配置只保留一个全局 `scatterSeed`，不再区分树木与细节。
+- 每个 `ScatterConfigSO` 表示一个散布生成组，配置：区块尺寸、可见距离、Prefab 池、密度、随机缩放范围、离路距离范围（Vector2 min/max）和目标层级（`TerrainWorkflowLayerMask` Flags）。
+- 配置资产统一存放在 `TerrainGeneratorConfigs/<项目>/ScatterConfig/`；编辑器中的“添加散布生成组”会创建独立 `.asset`，删除组时同步删除对应资产。
+- 散布位置不烘焙、不落 MapData。`TerrainBuilder.SetCameraPosition(Vector2)` 按组维护独立区块管理器与对象池：目标层级与 `offRoad` 范围过滤通过后，按密度选择像素中心、等概率选择 Prefab，并使用全局 seed ⊕ 组 index ⊕ 区块 index 保证结果可复现。
+- 最外圈像素与 Terrain 的映射遵守“像素中心对齐 Terrain 边界”规则；世界观察点在进入区块系统前转换为 Terrain 局部 X/Z 坐标。
 
 ### 阶段 7 · TerrainBuilder 构建 [待开发]（alphamap 算法待设计）
 
 规划步骤（对外**只暴露一个构建函数 `Build()`**，构建时机由实际项目按需调用，不内置双模式）：
 
-> 散布编辑（树木 / 细节）**不在此一次性构建**：`Build()` 只初始化区块管理器（`ChunkUpdateManager`）与对象池，之后由 **`SetCameraPosition(Vector2)`** 按观察点流式生成 / 回收（见阶段 5）。
+> 散布编辑**不在此一次性构建**：`Build()` 按生成组初始化区块管理器（`ChunkUpdateManager`）与对象池，之后由 **`SetCameraPosition(Vector2)`** 按观察点流式生成 / 回收（见阶段 5）。
 
 - **构建触发入口**：`Build(projectConfig, terrain)` 为 public，调用时机由调用方决定。窗口「工作流配置」子界面已提供「目标 Terrain」字段（`_terrainField`，窗口会话内临时、不保存 SO），可作为编辑器构建入口的 UI 锚点；运行时亦可由其它代码（如挂载 `TerrainBuilder` 的组件的 Awake）直接调用 `Build()`。⚠️ 当前窗口**尚未接线「构建」按钮**——需补一个调用 `terrainBuilder.Build(_project, _terrainField)` 的按钮，或依赖外部 / 运行时调用。
 
@@ -168,7 +155,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 ### 阶段 8 · 运行时 [待设计]
 
 - 运行时只读 float[][]（主配置 `mapDataFiles` 持 TextAsset 引用，随构建打包）；图片永不参与运行时。
-- 形态 **[待设计]**：TerrainBuilder 暴露 `Build()`，具体在 Awake / 场景加载 / 手动调用，由实际项目按需接入；散布编辑（树木/细节）由 **`SetCameraPosition(Vector2)`** 按观察点流式生成 / 回收（区块管理器驱动，见阶段 5）。
+- 形态 **[待设计]**：TerrainBuilder 暴露 `Build()`，具体在 Awake / 场景加载 / 手动调用，由实际项目按需接入；散布编辑由 **`SetCameraPosition(Vector2)`** 按生成组流式生成 / 回收（区块管理器驱动，见阶段 5）。
 
 ## MapData 存储层 [已完成]
 
@@ -177,7 +164,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - 格式：CSV，手写解析（无第三方库）。首行元数据头 `#key=...;w=...;h=...`（解析器跳过 `#` 行）；数值 **F3 三位小数**、InvariantCulture（跨平台一致）。
 - 引用：主配置持 `mapDataFiles`（`key + TextAsset`），随 SO 打进构建；**编辑器读直接读磁盘文件（保最新）**，**运行时走 TextAsset**。
 - 辅助：`MapDataTextureUtils`（float[][]↔Texture2D，仅编辑期显示/采集）。
-- key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。散布编辑（树木/细节）位置**不存储**（构建时按区块动态生成，见阶段 5）。
+- key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。散布位置**不存储**（构建时按生成组与区块动态生成，见阶段 5）。
 
 ## 目录结构
 
@@ -185,7 +172,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 Utils/
 ├── UniformPointGenerator.cs    [已完成] 均匀分布随机点（网格抖动 Jittered Grid，确定性种子可复现）
 ├── ObjectGroup.cs              [已完成] 摆件组 SO（groupName + GameObject 列表，供摆件编辑复用）
-└── ChunkUpdateManager.cs       [已完成] 区块更新管理器（激活/失活区块集合，MoveTo 驱动；供 TerrainBuilder 树木/细节流式生成）
+└── ChunkUpdateManager.cs       [已完成] 区块更新管理器（激活/失活区块集合，MoveTo 驱动；供 TerrainBuilder 分组流式生成）
 
 LayerEditor/
 ├── CsvArrayCodec.cs            [已完成] MapData CSV 手写编解码（元数据头 / F3 / ToJagged / ToFlat）
@@ -195,9 +182,10 @@ LayerEditor/
 ├── LayerConfigSO.cs            [已完成] 每层配置（颜色/名称/权重/高度范围/道路参数/最小离路距离/构建时参数；树/细节位置不存储）
 ├── TerrainPaintProjectSO.cs    [已完成] 主配置（素材池/规则/邻接组/mapResolution/mapDataFiles + MapData 接口）
 ├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
-├── TerrainBuilder.cs           [进行中] 构建组件（阶段 7：散布编辑（树木/细节）区块化对象池生成已实现；高度/纹理/摆件待开发）
+├── ScatterConfigSO.cs          [已完成] 单个散布生成组配置
+├── TerrainBuilder.cs           [进行中] 构建组件（阶段 7：分组散布的区块化对象池生成已实现；高度/纹理/摆件待开发）
 └── Editor/
-    ├── LayerEditorWindow.cs    [已完成] 工作流窗口（五子界面：散布编辑 = 树木+细节左右并排 + 创建向导尺寸单选 + MapData 接线）
+    ├── LayerEditorWindow.cs    [已完成] 八阶段工作流窗口（散布生成组 + 最终应用页 + MapData 接线）
     └── MapDataTextureUtils.cs  [已完成] float[][]↔Texture2D（仅显示/采集）
 
 Editor/
@@ -211,7 +199,7 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 
 - `Tools / Terrain Edit Workflow / Log Version`：打印版本号。
 - `Tools / Terrain Edit Workflow / Open Terrain Paint Workflow`：打开工作流窗口。
-- 窗口五个子界面：工作流配置（含栅格分辨率） / 区域编辑 / 高度编辑 / 贴图编辑 / 散布编辑（**树木 + 细节合并**：左栏 = 树木配置、右栏 = 细节配置，均含全局与每层生成参数）。
+- 窗口八个子界面按流程排列：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 散布编辑 / 摆件编辑 / 定点编辑 / 应用。散布编辑按生成组配置；应用页选择目标 Terrain 与连续应用阶段。
 
 ## 与 unity-python-bridge 的关系 [按需]
 
@@ -224,7 +212,7 @@ ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用
 
 - **M1 [已完成]** MapData 存储层（CsvArrayCodec / MapDataStore / SO 接口 / TextureUtils / 窗口接线）。
 - **M2 [已完成]** 散布编辑子界面配置编辑（每层密度/scale/离路限制/权重）；位置**构建时按区块动态生成**已并入 M3（TerrainBuilder 对象池生成，road&lt;0.5 + offRoad≥对应 limit 过滤）。
-- **M3 [待开发]** TerrainBuilder 组件（`Build()` 单一构建函数 + **散布编辑（树木/细节）区块化对象池生成（SetCameraPosition 驱动）** + 构建时 alphamap 噪声生成）。
+- **M3 [进行中]** TerrainBuilder 组件（阶段枚举控制 + **分组散布的区块化对象池生成（SetCameraPosition 驱动）** 已完成；高度与构建时 alphamap 待实现）。
 - **M4 [设计已定，待开发]** 摆件编辑（生成组规则化摆放 + 物体库；位于树木之前）。
 - **M5 [待设计]** bridge 可选集成（一键构建命令）。
 

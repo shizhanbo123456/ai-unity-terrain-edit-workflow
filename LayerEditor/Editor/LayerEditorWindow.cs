@@ -9,9 +9,9 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 顶层五个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 植被编辑。
-    /// 「工作流配置」整页显示：工作流图（层次图/RGB 图）、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）、Terrain 字段（窗口内临时，不入 SO）。
-    /// 「植被编辑」为左右两栏配置并排：左栏 = 原树木编辑配置（全局 + 每层），右栏 = 原细节编辑配置（全局 + 每层），各自独立滚动与折叠。
+    /// 顶层八个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 散布编辑 / 摆件编辑 / 定点编辑 / 应用。
+    /// 「工作流配置」整页显示：工作流图（层次图/RGB 图）、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）。
+    /// 「散布编辑」按多个 ScatterConfigSO 生成组配置均匀散布规则。
     /// 其余编辑子界面为左右分栏布局：
     ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠），整体共同滚动
     ///   右栏（宽）：信息生成（区域编辑=画布绘制；高度编辑=烘焙高度图；贴图编辑=距离场/路网计算）
@@ -29,14 +29,17 @@ namespace AiTerrainWorkflow.LayerEditor
             TriangleFill,
         }
 
-        /// <summary>顶层五个子界面（工作流配置无子页签；植被编辑 = 原树木 + 细节合并）。</summary>
+        /// <summary>顶层八个子界面，按工作流从配置、编辑到应用依次排列。</summary>
         private enum MainTab
         {
             WorkflowConfig,
             AreaEdit,
             HeightEdit,
             Texture,
-            VegetationEdit,
+            ScatterEdit,
+            PropEdit,
+            FixedPointEdit,
+            Apply,
         }
 
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
@@ -51,6 +54,9 @@ namespace AiTerrainWorkflow.LayerEditor
         /// <summary>工作流配置中填入的 Terrain（仅窗口内临时，不保存到配置 SO）。</summary>
         private Terrain _terrainField;
 
+        // 应用阶段（仅窗口会话状态）：必须为从高度开始的连续前缀。
+        private readonly bool[] _applyStages = { true, true, true, true, true };
+
         // 创建配置 UI
         private bool _creating;
         private string _newConfigName = "";
@@ -60,11 +66,9 @@ namespace AiTerrainWorkflow.LayerEditor
         private Vector2 _configScroll;
         private readonly List<bool> _layerFoldouts = new List<bool>();
 
-        // 植被编辑（树木 + 细节左右并排）：两栏各自独立滚动与折叠
-        private Vector2 _treeScroll;
-        private Vector2 _detailScroll;
-        private readonly List<bool> _treeFoldouts = new List<bool>();
-        private readonly List<bool> _detailFoldouts = new List<bool>();
+        // 散布生成组界面状态
+        private Vector2 _scatterScroll;
+        private readonly List<bool> _scatterFoldouts = new List<bool>();
 
         // 区域编辑子界面状态
         private Tool _tool = Tool.CircleBrush;
@@ -164,10 +168,23 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            // 植被编辑：左右两栏配置并排（左=树木，右=细节）
-            if (_mainTab == MainTab.VegetationEdit)
+            // 应用是工作流最后一步，单独整页显示。
+            if (_mainTab == MainTab.Apply)
             {
-                DrawVegetationEditView();
+                DrawApplyView();
+                return;
+            }
+
+            // 散布编辑：按生成组配置。
+            if (_mainTab == MainTab.ScatterEdit)
+            {
+                DrawScatterEditView();
+                return;
+            }
+
+            if (_mainTab == MainTab.PropEdit || _mainTab == MainTab.FixedPointEdit)
+            {
+                DrawPlannedEditView();
                 return;
             }
 
@@ -234,8 +251,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.FlexibleSpace();
 
-            // 五个子界面切换按钮（靠右；植被编辑 = 原树木 + 细节合并）
-            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "贴图编辑", "植被编辑" };
+            // 八个子界面按工作流顺序排列，应用始终位于最后。
+            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "贴图编辑", "散布编辑", "摆件编辑", "定点编辑", "应用" };
             int newMain = GUILayout.Toolbar((int)_mainTab, mainNames, EditorStyles.toolbarButton);
             if (newMain != (int)_mainTab)
             {
@@ -299,6 +316,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 return false;
             }
             Directory.CreateDirectory(dirFull);
+            Directory.CreateDirectory(Path.Combine(dirFull, "ScatterConfig"));
 
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name;
@@ -440,15 +458,58 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorUtility.SetDirty(layer);
             }
 
-            EditorGUILayout.Space(8);
+            EditorGUILayout.EndScrollView();
+            EditorUtility.SetDirty(_project);
+        }
 
-            // Terrain 字段（窗口内临时，不入 SO）
+        private void DrawApplyView()
+        {
+            _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+            EditorGUILayout.LabelField("应用", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "这是工作流的最后一步。选择目标 Terrain 和需要应用到的最终阶段，然后按顺序执行高度至该阶段。",
+                MessageType.Info);
+
+            EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("目标 Terrain（仅本次窗口会话，不保存到配置）", EditorStyles.boldLabel);
             _terrainField = (Terrain)EditorGUILayout.ObjectField(
                 "Terrain", _terrainField, typeof(Terrain), true);
 
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("应用范围", EditorStyles.boldLabel);
+            string[] stageNames = { "高度编辑", "贴图编辑", "散布编辑", "摆件编辑", "定点编辑" };
+            bool previousEnabled = true;
+            for (int i = 0; i < _applyStages.Length; i++)
+            {
+                using (new EditorGUI.DisabledScope(!previousEnabled))
+                    _applyStages[i] = previousEnabled && EditorGUILayout.ToggleLeft(stageNames[i], _applyStages[i]);
+                previousEnabled &= _applyStages[i];
+            }
+            EditorGUILayout.HelpBox("阶段按界面顺序应用；当前置阶段未勾选时，其后的阶段不会应用。", MessageType.None);
+
+            using (new EditorGUI.DisabledScope(_terrainField == null || !_applyStages[0]))
+            {
+                if (GUILayout.Button("应用", GUILayout.Height(28f)))
+                    ApplyWorkflowToTerrain();
+            }
+
             EditorGUILayout.EndScrollView();
-            EditorUtility.SetDirty(_project);
+        }
+
+        private void ApplyWorkflowToTerrain()
+        {
+            if (_project == null || _terrainField == null)
+                return;
+
+            int lastStage = 0;
+            while (lastStage + 1 < _applyStages.Length && _applyStages[lastStage + 1])
+                lastStage++;
+
+            var builder = _terrainField.GetComponent<TerrainBuilder>();
+            if (builder == null)
+                builder = Undo.AddComponent<TerrainBuilder>(_terrainField.gameObject);
+
+            builder.Build(_project, _terrainField, (TerrainWorkflowStage)lastStage);
         }
 
         /// <summary>调整 Layer 数量：增层创建新 SO（末尾追加），减层删除末尾 SO 资产。</summary>
@@ -605,7 +666,7 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        /// <summary>树木 · 全局配置（植被编辑左栏）：种子 / 区块参数 / 树木 Prefab 池。</summary>
+        /// <summary>树木 · 全局配置（散布编辑左栏）：种子 / 区块参数 / 树木 Prefab 池。</summary>
         private void DrawTreeGlobalConfig()
         {
             EditorGUILayout.LabelField("树木 · 全局配置", EditorStyles.boldLabel);
@@ -619,7 +680,7 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawPrefabPool(_project.treePrefabs, "树木");
         }
 
-        /// <summary>细节 · 全局配置（植被编辑右栏）：种子 / 区块参数 / 细节 Prefab 池。</summary>
+        /// <summary>细节 · 全局配置（散布编辑右栏）：种子 / 区块参数 / 细节 Prefab 池。</summary>
         private void DrawDetailGlobalConfig()
         {
             EditorGUILayout.LabelField("细节 · 全局配置", EditorStyles.boldLabel);
@@ -1413,59 +1474,144 @@ namespace AiTerrainWorkflow.LayerEditor
                 rFlat, CsvArrayCodec.ToFlat(g), CsvArrayCodec.ToFlat(b), w, h);
         }
 
-        // ---------- ③ 植被编辑（树木 + 细节合并界面：左栏树木配置，右栏细节配置） ----------
+        // ---------- ③ 散布编辑 ----------
 
         /// <summary>
-        /// 植被编辑子界面：左右两栏配置并排，各自独立滚动与折叠。
-        /// 左栏 = 原树木编辑配置（全局：Seed/区块/Prefab 池 + 每层：密度/缩放/离路限制/权重）；
-        /// 右栏 = 原细节编辑配置（全局：Seed/区块/Prefab 池 + 每层：密度/缩放/离路限制/权重）。
-        /// 树木/细节位置均不在此生成：构建时由 TerrainBuilder.SetCameraPosition 按区块动态生成（见 README 阶段 5/6/7）。
+        /// 散布位置不落盘；构建时由 TerrainBuilder.SetCameraPosition 按生成组逐区块生成与回收。
         /// </summary>
-        private void DrawVegetationEditView()
+        private void DrawScatterEditView()
         {
-            const float colWidth = 360f;
+            _scatterScroll = EditorGUILayout.BeginScrollView(_scatterScroll);
+            EditorGUILayout.LabelField("散布编辑", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "每个生成组在目标层级与离路距离范围的交集内均匀散布。配置资产保存在当前项目的 ScatterConfig 子目录。",
+                MessageType.Info);
 
-            EditorGUILayout.BeginHorizontal();
-
-            // 左栏：树木配置（全局 + 层级，共同滚动）
-            EditorGUILayout.BeginVertical(GUILayout.Width(colWidth));
-            _treeScroll = EditorGUILayout.BeginScrollView(_treeScroll);
-            DrawTreeGlobalConfig();
+            _project.scatterSeed = EditorGUILayout.IntField("全局 Seed", _project.scatterSeed);
             EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("层级配置 · 树木（每层树木生成权重）", EditorStyles.boldLabel);
-            EnsureFoldoutCount(_treeFoldouts);
-            for (int i = 0; i < _project.layers.Count; i++)
+
+            EnsureScatterFoldouts();
+            for (int i = 0; i < _project.scatterGroups.Count; i++)
             {
-                var layer = _project.layers[i];
-                if (layer == null) continue;
-                DrawTreeLayerConfig(i, layer, _treeFoldouts);
+                var group = _project.scatterGroups[i];
+                if (group == null) continue;
+                DrawScatterGroup(i, group);
             }
+
+            if (GUILayout.Button("+ 添加散布生成组", GUILayout.Height(26f)))
+                CreateScatterGroup();
+
             EditorGUILayout.EndScrollView();
-            EditorGUILayout.EndVertical();
-
-            // 分隔线
-            EditorGUILayout.BeginVertical(GUILayout.Width(6));
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndVertical();
-
-            // 右栏：细节配置（全局 + 层级，共同滚动）
-            EditorGUILayout.BeginVertical(GUILayout.Width(colWidth));
-            _detailScroll = EditorGUILayout.BeginScrollView(_detailScroll);
-            DrawDetailGlobalConfig();
-            EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("层级配置 · 细节（每层细节生成权重）", EditorStyles.boldLabel);
-            EnsureFoldoutCount(_detailFoldouts);
-            for (int i = 0; i < _project.layers.Count; i++)
-            {
-                var layer = _project.layers[i];
-                if (layer == null) continue;
-                DrawDetailLayerConfig(i, layer, _detailFoldouts);
-            }
-            EditorGUILayout.EndScrollView();
-            EditorGUILayout.EndVertical();
-
-            EditorGUILayout.EndHorizontal();
             EditorUtility.SetDirty(_project);
+        }
+
+        private void EnsureScatterFoldouts()
+        {
+            while (_scatterFoldouts.Count < _project.scatterGroups.Count) _scatterFoldouts.Add(true);
+            if (_scatterFoldouts.Count > _project.scatterGroups.Count)
+                _scatterFoldouts.RemoveRange(_project.scatterGroups.Count,
+                    _scatterFoldouts.Count - _project.scatterGroups.Count);
+        }
+
+        private void DrawScatterGroup(int index, ScatterConfigSO group)
+        {
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginHorizontal();
+            _scatterFoldouts[index] = EditorGUILayout.Foldout(
+                _scatterFoldouts[index], $"生成组 {index}: {group.groupName}", true);
+            if (GUILayout.Button("删除", GUILayout.Width(56f)))
+            {
+                DeleteScatterGroup(index, group);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (_scatterFoldouts[index])
+            {
+                group.groupName = EditorGUILayout.TextField("名称", group.groupName);
+                group.chunkSize = EditorGUILayout.Vector2Field("区块尺寸（米，x/z）", group.chunkSize);
+                group.chunkSize.x = Mathf.Max(0.0001f, group.chunkSize.x);
+                group.chunkSize.y = Mathf.Max(0.0001f, group.chunkSize.y);
+                group.visibleDistance = Mathf.Max(0f,
+                    EditorGUILayout.FloatField("可见距离（米）", group.visibleDistance));
+                group.density = Mathf.Max(0f, EditorGUILayout.FloatField("密度（个/㎡）", group.density));
+
+                var scale = EditorGUILayout.Vector2Field("随机缩放（min/max）", group.randomScale);
+                scale.x = Mathf.Max(0f, scale.x);
+                scale.y = Mathf.Max(scale.x, scale.y);
+                group.randomScale = scale;
+
+                var offRoad = EditorGUILayout.Vector2Field("离路距离范围（米）", group.offRoadDistanceRange);
+                offRoad.x = Mathf.Max(0f, offRoad.x);
+                offRoad.y = Mathf.Max(offRoad.x, offRoad.y);
+                group.offRoadDistanceRange = offRoad;
+
+                group.targetLayers = (TerrainWorkflowLayerMask)EditorGUILayout.EnumFlagsField(
+                    "目标层级", group.targetLayers);
+
+                EditorGUILayout.Space(4);
+                EditorGUILayout.LabelField("Prefab 池（等概率）", EditorStyles.boldLabel);
+                DrawScatterPrefabPool(group.prefabs);
+                EditorUtility.SetDirty(group);
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        private static void DrawScatterPrefabPool(List<GameObject> prefabs)
+        {
+            for (int i = 0; i < prefabs.Count; i++)
+            {
+                EditorGUILayout.BeginHorizontal();
+                prefabs[i] = (GameObject)EditorGUILayout.ObjectField(
+                    $"Prefab[{i}]", prefabs[i], typeof(GameObject), false);
+                if (GUILayout.Button("-", GUILayout.Width(22f)))
+                    prefabs.RemoveAt(i--);
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button("+ 添加 Prefab"))
+                prefabs.Add(null);
+        }
+
+        private void CreateScatterGroup()
+        {
+            string projectPath = AssetDatabase.GetAssetPath(_project);
+            string projectDir = Path.GetDirectoryName(projectPath)?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(projectDir)) return;
+
+            string folder = projectDir + "/ScatterConfig";
+            if (!AssetDatabase.IsValidFolder(folder))
+                AssetDatabase.CreateFolder(projectDir, "ScatterConfig");
+
+            var group = CreateInstance<ScatterConfigSO>();
+            group.groupName = $"散布生成组 {_project.scatterGroups.Count}";
+            string assetPath = AssetDatabase.GenerateUniqueAssetPath(folder + "/ScatterGroup.asset");
+            AssetDatabase.CreateAsset(group, assetPath);
+            _project.scatterGroups.Add(group);
+            _scatterFoldouts.Add(true);
+            EditorUtility.SetDirty(_project);
+            AssetDatabase.SaveAssets();
+        }
+
+        private void DeleteScatterGroup(int index, ScatterConfigSO group)
+        {
+            if (!EditorUtility.DisplayDialog("删除散布生成组", $"确定删除“{group.groupName}”及其配置资产？", "删除", "取消"))
+                return;
+
+            string assetPath = AssetDatabase.GetAssetPath(group);
+            _project.scatterGroups.RemoveAt(index);
+            if (index < _scatterFoldouts.Count) _scatterFoldouts.RemoveAt(index);
+            EditorUtility.SetDirty(_project);
+            if (!string.IsNullOrEmpty(assetPath)) AssetDatabase.DeleteAsset(assetPath);
+            AssetDatabase.SaveAssets();
+        }
+
+        private void DrawPlannedEditView()
+        {
+            string title = _mainTab == MainTab.PropEdit ? "摆件编辑" : "定点编辑";
+            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox($"{title}子界面已建立，具体配置与编辑功能将在后续实现。", MessageType.Info);
         }
 
         /// <summary>保持折叠状态列表长度与 Layer 数量一致（截断或补 false）。</summary>

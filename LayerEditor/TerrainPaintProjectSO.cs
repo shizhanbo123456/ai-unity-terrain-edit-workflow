@@ -48,7 +48,7 @@ namespace AiTerrainWorkflow.LayerEditor
     ///   - 区域编辑：层次图（layerMap，绘画画布）
     ///   - 高度编辑：heightSeed / heightScale / smoothStep / smoothIterations
     ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
-    ///   - 树木编辑 / 细节编辑：Prefab 池（treePrefabs / detailPrefabs）+ 全局种子（treeSeed / detailSeed）+ 区块参数（treeChunkSize / treeVisibleDistance / detailChunkSize / detailVisibleDistance）
+    ///   - 散布编辑：全局 scatterSeed + 多个 ScatterConfigSO 生成组
     /// </summary>
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]
     public class TerrainPaintProjectSO : ScriptableObject
@@ -114,27 +114,42 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("邻接组（组合层级分组）：每个组是一个层级索引列表，如 {{1,2,3},{4,5}}。同一层级不可出现在多个组中（会校验报错）。")]
         public List<List<int>> adjacencyGroups = new List<List<int>>();
 
-        // ---------- 树木编辑 ----------
+        // ---------- 散布编辑 ----------
 
-        [Header("树木编辑")]
+        [Header("散布编辑")]
+        [Tooltip("全部散布生成组共用的随机种子")]
+        public int scatterSeed = 0;
+
+        [Tooltip("散布生成组；资产存放在当前项目配置目录的 ScatterConfig 子目录")]
+        public List<ScatterConfigSO> scatterGroups = new List<ScatterConfigSO>();
+
+        // ---------- 旧树木/细节配置（兼容已有资产，不再由新散布工作流使用） ----------
+
+        [HideInInspector]
         [Tooltip("树木位置生成用的全局种子（TreeSeed，不细化到层级）")]
         public int treeSeed = 0;
+        [HideInInspector]
         [Tooltip("树木区块尺寸（米，x/z）：构建时按区块划分生成树木的粒度")]
         public Vector2 treeChunkSize = new Vector2(16f, 16f);
+        [HideInInspector]
         [Tooltip("树木可见距离（米）：区块中心距观察点（TerrainBuilder.SetCameraPosition）超过该值则回收隐藏")]
         public float treeVisibleDistance = 60f;
+        [HideInInspector]
         [Tooltip("树木/植被 Prefab 池（树木编辑 · 全局配置中的物理列表）")]
         public List<GameObject> treePrefabs = new List<GameObject>();
 
         // ---------- 细节编辑 ----------
 
-        [Header("细节编辑")]
+        [HideInInspector]
         [Tooltip("细节位置生成用的全局种子（DetailSeed，不细化到层级）")]
         public int detailSeed = 0;
+        [HideInInspector]
         [Tooltip("细节区块尺寸（米，x/z）：构建时按区块划分生成细节的粒度")]
         public Vector2 detailChunkSize = new Vector2(8f, 8f);
+        [HideInInspector]
         [Tooltip("细节可见距离（米）：区块中心距观察点（TerrainBuilder.SetCameraPosition）超过该值则回收隐藏")]
         public float detailVisibleDistance = 40f;
+        [HideInInspector]
         [Tooltip("细节网格/草 Prefab 池（细节编辑 · 全局配置中的物理列表）")]
         public List<GameObject> detailPrefabs = new List<GameObject>();
 
