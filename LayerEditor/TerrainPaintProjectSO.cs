@@ -123,6 +123,15 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("散布生成组；资产存放在当前项目配置目录的 ScatterConfig 子目录")]
         public List<ScatterConfigSO> scatterGroups = new List<ScatterConfigSO>();
 
+        // ---------- 摆件编辑 ----------
+
+        [Header("摆件编辑")]
+        [Tooltip("全部摆件生成组共用的随机种子")]
+        public int propSeed = 0;
+
+        [Tooltip("摆件生成组；资产存放在当前项目配置目录的 PropConfig 子目录")]
+        public List<PropConfigSO> propGroups = new List<PropConfigSO>();
+
         // ---------- 旧树木/细节配置（兼容已有资产，不再由新散布工作流使用） ----------
 
         [HideInInspector]

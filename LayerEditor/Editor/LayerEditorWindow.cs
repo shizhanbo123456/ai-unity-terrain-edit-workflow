@@ -69,6 +69,8 @@ namespace AiTerrainWorkflow.LayerEditor
         // 散布生成组界面状态
         private Vector2 _scatterScroll;
         private readonly List<bool> _scatterFoldouts = new List<bool>();
+        private Vector2 _propScroll;
+        private readonly List<bool> _propFoldouts = new List<bool>();
 
         // 区域编辑子界面状态
         private Tool _tool = Tool.CircleBrush;
@@ -182,7 +184,13 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
-            if (_mainTab == MainTab.PropEdit || _mainTab == MainTab.FixedPointEdit)
+            if (_mainTab == MainTab.PropEdit)
+            {
+                DrawPropEditView();
+                return;
+            }
+
+            if (_mainTab == MainTab.FixedPointEdit)
             {
                 DrawPlannedEditView();
                 return;
@@ -317,6 +325,7 @@ namespace AiTerrainWorkflow.LayerEditor
             }
             Directory.CreateDirectory(dirFull);
             Directory.CreateDirectory(Path.Combine(dirFull, "ScatterConfig"));
+            Directory.CreateDirectory(Path.Combine(dirFull, "PropConfig"));
 
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name;
@@ -1552,26 +1561,30 @@ namespace AiTerrainWorkflow.LayerEditor
                     "目标层级", group.targetLayers);
 
                 EditorGUILayout.Space(4);
-                EditorGUILayout.LabelField("Prefab 池（等概率）", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("Prefab 池（按权重）", EditorStyles.boldLabel);
                 DrawScatterPrefabPool(group.prefabs);
                 EditorUtility.SetDirty(group);
             }
             EditorGUILayout.EndVertical();
         }
 
-        private static void DrawScatterPrefabPool(List<GameObject> prefabs)
+        private static void DrawScatterPrefabPool(List<ScatterPrefabEntry> prefabs)
         {
             for (int i = 0; i < prefabs.Count; i++)
             {
+                if (prefabs[i] == null) prefabs[i] = new ScatterPrefabEntry();
                 EditorGUILayout.BeginHorizontal();
-                prefabs[i] = (GameObject)EditorGUILayout.ObjectField(
-                    $"Prefab[{i}]", prefabs[i], typeof(GameObject), false);
+                prefabs[i].prefab = (GameObject)EditorGUILayout.ObjectField(
+                    $"Prefab[{i}]", prefabs[i].prefab, typeof(GameObject), false);
+                GUILayout.Label("权重", GUILayout.Width(32f));
+                prefabs[i].weight = Mathf.Max(0,
+                    EditorGUILayout.IntField(prefabs[i].weight, GUILayout.Width(54f)));
                 if (GUILayout.Button("-", GUILayout.Width(22f)))
                     prefabs.RemoveAt(i--);
                 EditorGUILayout.EndHorizontal();
             }
             if (GUILayout.Button("+ 添加 Prefab"))
-                prefabs.Add(null);
+                prefabs.Add(new ScatterPrefabEntry());
         }
 
         private void CreateScatterGroup()
@@ -1607,11 +1620,141 @@ namespace AiTerrainWorkflow.LayerEditor
             AssetDatabase.SaveAssets();
         }
 
+        private void DrawPropEditView()
+        {
+            _propScroll = EditorGUILayout.BeginScrollView(_propScroll);
+            EditorGUILayout.LabelField("摆件编辑", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "摆件组保存规则配置；具体实例化与防重叠将在 TerrainBuilder.ApplyProps 中实现。",
+                MessageType.Info);
+            _project.propSeed = EditorGUILayout.IntField("全局 Seed", _project.propSeed);
+            EditorGUILayout.Space(8);
+
+            EnsurePropFoldouts();
+            for (int i = 0; i < _project.propGroups.Count; i++)
+            {
+                var group = _project.propGroups[i];
+                if (group == null) continue;
+                DrawPropGroup(i, group);
+            }
+            if (GUILayout.Button("+ 添加摆件生成组", GUILayout.Height(26f))) CreatePropGroup();
+            EditorGUILayout.EndScrollView();
+            EditorUtility.SetDirty(_project);
+        }
+
+        private void EnsurePropFoldouts()
+        {
+            while (_propFoldouts.Count < _project.propGroups.Count) _propFoldouts.Add(true);
+            if (_propFoldouts.Count > _project.propGroups.Count)
+                _propFoldouts.RemoveRange(_project.propGroups.Count, _propFoldouts.Count - _project.propGroups.Count);
+        }
+
+        private void DrawPropGroup(int index, PropConfigSO group)
+        {
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginHorizontal();
+            _propFoldouts[index] = EditorGUILayout.Foldout(
+                _propFoldouts[index], $"生成组 {index}: {group.groupName}", true);
+            if (GUILayout.Button("删除", GUILayout.Width(56f)))
+            {
+                DeletePropGroup(index, group);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (_propFoldouts[index])
+            {
+                group.groupName = EditorGUILayout.TextField("名称", group.groupName);
+                group.maxFailedAttempts = Mathf.Max(0,
+                    EditorGUILayout.IntField("失败尝试次数上限", group.maxFailedAttempts));
+                group.expectedDensity = Mathf.Max(0f,
+                    EditorGUILayout.FloatField("预期密度（个/㎡）", group.expectedDensity));
+
+                var batch = EditorGUILayout.Vector2IntField("生成规模（最少保留/生成数）", group.batchSize);
+                batch.x = Mathf.Max(0, batch.x);
+                batch.y = Mathf.Max(batch.x, batch.y);
+                group.batchSize = batch;
+
+                group.targetLayers = (TerrainWorkflowLayerMask)EditorGUILayout.EnumFlagsField(
+                    "目标层级", group.targetLayers);
+                group.outOfBoundsTolerance = EditorGUILayout.Slider(
+                    "越界宽容", group.outOfBoundsTolerance, 0f, 1f);
+                group.arrangementBasis = (PropArrangementBasis)EditorGUILayout.EnumPopup(
+                    "排列依据", group.arrangementBasis);
+
+                var range = EditorGUILayout.Vector2Field("排列位置值域", group.arrangementRange);
+                if (range.y < range.x) range.y = range.x;
+                group.arrangementRange = range;
+                group.rotationMode = (PropRotationMode)EditorGUILayout.EnumPopup("旋转", group.rotationMode);
+                group.distributionMode = (PropDistributionMode)EditorGUILayout.EnumPopup(
+                    "分布形式", group.distributionMode);
+                group.distributionSpacing = EditorGUILayout.FloatField(
+                    "分布间距（可为负）", group.distributionSpacing);
+
+                EditorGUILayout.Space(4);
+                EditorGUILayout.LabelField("Prefab 池", EditorStyles.boldLabel);
+                DrawPropPrefabPool(group.prefabs);
+                EditorUtility.SetDirty(group);
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        private static void DrawPropPrefabPool(List<PropPrefabEntry> prefabs)
+        {
+            for (int i = 0; i < prefabs.Count; i++)
+            {
+                if (prefabs[i] == null) prefabs[i] = new PropPrefabEntry();
+                EditorGUILayout.BeginHorizontal();
+                prefabs[i].prefab = (GameObject)EditorGUILayout.ObjectField(
+                    $"Prefab[{i}]", prefabs[i].prefab, typeof(GameObject), false);
+                GUILayout.Label("权重", GUILayout.Width(32f));
+                prefabs[i].weight = Mathf.Max(0,
+                    EditorGUILayout.IntField(prefabs[i].weight, GUILayout.Width(48f)));
+                GUILayout.Label("下限", GUILayout.Width(32f));
+                prefabs[i].minimumCount = Mathf.Max(0,
+                    EditorGUILayout.IntField(prefabs[i].minimumCount, GUILayout.Width(48f)));
+                if (GUILayout.Button("-", GUILayout.Width(22f))) prefabs.RemoveAt(i--);
+                EditorGUILayout.EndHorizontal();
+            }
+            if (GUILayout.Button("+ 添加 Prefab")) prefabs.Add(new PropPrefabEntry());
+        }
+
+        private void CreatePropGroup()
+        {
+            string projectPath = AssetDatabase.GetAssetPath(_project);
+            string projectDir = Path.GetDirectoryName(projectPath)?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(projectDir)) return;
+            string folder = projectDir + "/PropConfig";
+            if (!AssetDatabase.IsValidFolder(folder)) AssetDatabase.CreateFolder(projectDir, "PropConfig");
+
+            var group = CreateInstance<PropConfigSO>();
+            group.groupName = $"摆件生成组 {_project.propGroups.Count}";
+            string assetPath = AssetDatabase.GenerateUniqueAssetPath(folder + "/PropGroup.asset");
+            AssetDatabase.CreateAsset(group, assetPath);
+            _project.propGroups.Add(group);
+            _propFoldouts.Add(true);
+            EditorUtility.SetDirty(_project);
+            AssetDatabase.SaveAssets();
+        }
+
+        private void DeletePropGroup(int index, PropConfigSO group)
+        {
+            if (!EditorUtility.DisplayDialog("删除摆件生成组", $"确定删除“{group.groupName}”及其配置资产？", "删除", "取消"))
+                return;
+            string assetPath = AssetDatabase.GetAssetPath(group);
+            _project.propGroups.RemoveAt(index);
+            if (index < _propFoldouts.Count) _propFoldouts.RemoveAt(index);
+            EditorUtility.SetDirty(_project);
+            if (!string.IsNullOrEmpty(assetPath)) AssetDatabase.DeleteAsset(assetPath);
+            AssetDatabase.SaveAssets();
+        }
+
         private void DrawPlannedEditView()
         {
-            string title = _mainTab == MainTab.PropEdit ? "摆件编辑" : "定点编辑";
-            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox($"{title}子界面已建立，具体配置与编辑功能将在后续实现。", MessageType.Info);
+            EditorGUILayout.LabelField("定点编辑", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("定点编辑子界面已建立，具体配置与编辑功能将在后续实现。", MessageType.Info);
         }
 
         /// <summary>保持折叠状态列表长度与 Layer 数量一致（截断或补 false）。</summary>

@@ -32,6 +32,7 @@ namespace AiTerrainWorkflow.LayerEditor
             public int seed;
             public readonly Dictionary<int, ObjectPool<GameObject>> pools = new Dictionary<int, ObjectPool<GameObject>>();
             public readonly List<int> prefabKeys = new List<int>();
+            public readonly List<int> prefabWeights = new List<int>();
             public readonly Dictionary<Vector2Int, List<GameObject>> objectsByChunk =
                 new Dictionary<Vector2Int, List<GameObject>>();
         }
@@ -127,9 +128,11 @@ namespace AiTerrainWorkflow.LayerEditor
                 };
                 for (int prefabIndex = 0; prefabIndex < group.prefabs.Count; prefabIndex++)
                 {
-                    if (group.prefabs[prefabIndex] == null) continue;
-                    runtime.pools[prefabIndex] = CreatePool(group.prefabs[prefabIndex], prefabIndex);
+                    var entry = group.prefabs[prefabIndex];
+                    if (entry == null || entry.prefab == null || entry.weight <= 0) continue;
+                    runtime.pools[prefabIndex] = CreatePool(entry.prefab, prefabIndex);
                     runtime.prefabKeys.Add(prefabIndex);
+                    runtime.prefabWeights.Add(entry.weight);
                 }
                 _scatterRuntimes.Add(runtime);
             }
@@ -281,7 +284,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 {
                     var pxp = pixels[i];
                     if (runtime.prefabKeys.Count == 0) continue;
-                    int key = runtime.prefabKeys[rng.Next(runtime.prefabKeys.Count)];
+                    int key = PickWeightedPrefab(runtime, rng);
                     if (!runtime.pools.TryGetValue(key, out var pool))
                         continue;
                     var go = pool.Get();
@@ -312,6 +315,21 @@ namespace AiTerrainWorkflow.LayerEditor
                 int j = rng.Next(i + 1);
                 (list[i], list[j]) = (list[j], list[i]);
             }
+        }
+
+        private static int PickWeightedPrefab(ScatterRuntime runtime, System.Random rng)
+        {
+            int total = 0;
+            for (int i = 0; i < runtime.prefabWeights.Count; i++) total += runtime.prefabWeights[i];
+            if (total <= 0) return -1;
+
+            int value = rng.Next(total);
+            for (int i = 0; i < runtime.prefabWeights.Count; i++)
+            {
+                if (value < runtime.prefabWeights[i]) return runtime.prefabKeys[i];
+                value -= runtime.prefabWeights[i];
+            }
+            return -1;
         }
 
     }

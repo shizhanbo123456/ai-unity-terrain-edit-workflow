@@ -47,7 +47,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
-| 4 摆件编辑 | 物体库 prefab + 生成组配置 | 生成组规则化摆放（候选点采样 + 距离场值域/目标layer 过滤(越界宽容容错) + 分布间距去重(同批可重叠)）；防重叠在构建期按实际地形尺寸处理、不依赖 MapData | 生成组配置（主配置）+ 物体库 | **[设计已定，待开发]** |
+| 4 摆件编辑 | 物体库 prefab + 生成组配置 | 生成组规则化摆放（候选点采样 + 距离场值域/目标layer 过滤(越界宽容容错) + 分布间距去重(同批可重叠)）；防重叠在构建期按实际地形尺寸处理、不依赖 MapData | `PropConfig/*.asset` + 物体库 | **[进行中]**（配置界面完成，放置算法待开发） |
 | 5 散布编辑 | layerMap + 多个散布生成组 | 按组配置目标层级、离路范围、密度、缩放、Prefab 池与流式区块参数 | `ScatterConfig/*.asset`；位置不存储 | **[已完成]**（配置编辑 + 分组流式生成） |
 | 7 构建 | 主配置（SO + 全部 MapData） | `TerrainBuilder.Build()`（构建函数单一入口） | 真实 TerrainData + 摆件 GameObject | **[待开发]**（alphamap 算法 **[待设计]**） |
 | 8 运行时 | 主配置（TextAsset → float[][]） | 按需调用 Build()（时机由实际项目定） | 运行时地形 | **[待设计]** |
@@ -86,9 +86,10 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - 结果写入四个 MapData key：`distance`（R，**像素距离真实值**）/ `occupancy`（G）/ `road`（B）/ `offRoad`（**米**：语义层区域（不含 Layer0）内到最近道路的距离，道路处=0、区域外=0）。**范围不持久化**：预览 RGB 图的 R 通道由数据现算 max 归一化，构建时同样现算。
 - **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。
 
-### 阶段 4 · 摆件编辑 [设计已定，待开发]（2026-08-22 定稿）
+### 阶段 4 · 摆件编辑 [进行中]（配置界面已完成，放置算法待开发）
 
-- 位于树木编辑之前。生成时配置**多个生成组**（`GenerationGroup`，写入主配置 `TerrainPaintProjectSO`），每组独立描述一类物件的摆放规则；执行挂接 `TerrainBuilder.PlaceProps`（阶段 7 步骤 6）。
+- 位于散布编辑之后。生成时配置**多个生成组**（`PropConfigSO`，由主配置 `TerrainPaintProjectSO` 引用），每组独立描述一类物件的摆放规则；执行挂接 `TerrainBuilder.ApplyProps`。
+- 当前实现以 `PropConfigSO` 承载每个生成组，资产保存在 `TerrainGeneratorConfigs/<项目>/PropConfig/`；主配置提供单一全局 `propSeed`。编辑器已支持生成组及 Prefab 权重/数量下限的增删改，`TerrainBuilder.ApplyProps` 暂为空。
 
 **物体资源规范**（与阶段 0 一致）：
 - 所有可用场景物体集中在统一文件夹；**通常**每个物体一个 prefab、只含该物体，**根节点 transform/rotation 为默认值（零变换）**。
@@ -128,7 +129,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - 主配置只保留一个全局 `scatterSeed`，不再区分树木与细节。
 - 每个 `ScatterConfigSO` 表示一个散布生成组，配置：区块尺寸、可见距离、Prefab 池、密度、随机缩放范围、离路距离范围（Vector2 min/max）和目标层级（`TerrainWorkflowLayerMask` Flags）。
 - 配置资产统一存放在 `TerrainGeneratorConfigs/<项目>/ScatterConfig/`；编辑器中的“添加散布生成组”会创建独立 `.asset`，删除组时同步删除对应资产。
-- 散布位置不烘焙、不落 MapData。`TerrainBuilder.SetCameraPosition(Vector2)` 按组维护独立区块管理器与对象池：目标层级与 `offRoad` 范围过滤通过后，按密度选择像素中心、等概率选择 Prefab，并使用全局 seed ⊕ 组 index ⊕ 区块 index 保证结果可复现。
+- 散布位置不烘焙、不落 MapData。`TerrainBuilder.SetCameraPosition(Vector2)` 按组维护独立区块管理器与对象池：目标层级与 `offRoad` 范围过滤通过后，按密度选择像素中心、按 Prefab 权重随机选择，并使用全局 seed ⊕ 组 index ⊕ 区块 index 保证结果可复现。
 - 最外圈像素与 Terrain 的映射遵守“像素中心对齐 Terrain 边界”规则；世界观察点在进入区块系统前转换为 Terrain 局部 X/Z 坐标。
 
 ### 阶段 7 · TerrainBuilder 构建 [待开发]（alphamap 算法待设计）
@@ -183,6 +184,7 @@ LayerEditor/
 ├── TerrainPaintProjectSO.cs    [已完成] 主配置（素材池/规则/邻接组/mapResolution/mapDataFiles + MapData 接口）
 ├── TerrainRoadGen.cs           [已完成] 核心算法（EDT 距离场 / 随机游走 / RGB 合成 / 高度烘焙 float[][]）
 ├── ScatterConfigSO.cs          [已完成] 单个散布生成组配置
+├── PropConfigSO.cs             [已完成] 单个摆件生成组配置（实际放置待开发）
 ├── TerrainBuilder.cs           [进行中] 构建组件（阶段 7：分组散布的区块化对象池生成已实现；高度/纹理/摆件待开发）
 └── Editor/
     ├── LayerEditorWindow.cs    [已完成] 八阶段工作流窗口（散布生成组 + 最终应用页 + MapData 接线）
