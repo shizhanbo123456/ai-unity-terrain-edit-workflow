@@ -11,6 +11,8 @@ Shader "Custom/BothFaceRender"
     {
         Tags { "Queue"="Transparent" "RenderType"="Transparent" }
         LOD 200
+        ZWrite On
+        Blend SrcAlpha OneMinusSrcAlpha
 
         CGPROGRAM
         // Physically based Standard lighting model, and enable shadows on all light types
@@ -41,6 +43,8 @@ Shader "Custom/BothFaceRender"
         {
             // Albedo comes from a texture tinted by color
             fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
+            // 不让完全透明的背景写入深度；可见像素仍参与深度遮挡。
+            clip(c.a - 0.001);
             o.Albedo = c.rgb;
             // Metallic and smoothness come from slider variables
             o.Metallic = _Metallic;
