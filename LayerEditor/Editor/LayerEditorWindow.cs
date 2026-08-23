@@ -43,9 +43,11 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>配置根目录（Assets 相对路径）；每个配置一个子文件夹。</summary>
-        public const string ConfigRootDirRelative = "Assets/TerrainGeneratorConfigs";
-        private const string LegacyConfigRootDirRelative =
+        public const string ConfigRootDirRelative =
+            "Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs";
+        private const string LegacyScriptConfigRootDirRelative =
             "Assets/ai-unity-terrain-edit-workflow/LayerEditor/TerrainGeneratorConfigs";
+        private const string LegacyProjectConfigRootDirRelative = "Assets/TerrainGeneratorConfigs";
 
         private const string PrefsLastProject = "AiTerrainWorkflow.LastPaintProject";
 
@@ -146,9 +148,14 @@ namespace AiTerrainWorkflow.LayerEditor
         private void OnEnable()
         {
             string path = EditorPrefs.GetString(PrefsLastProject, "");
-            if (path.StartsWith(LegacyConfigRootDirRelative + "/"))
+            if (path.StartsWith(LegacyScriptConfigRootDirRelative + "/"))
             {
-                path = ConfigRootDirRelative + path.Substring(LegacyConfigRootDirRelative.Length);
+                path = ConfigRootDirRelative + path.Substring(LegacyScriptConfigRootDirRelative.Length);
+                EditorPrefs.SetString(PrefsLastProject, path);
+            }
+            else if (path.StartsWith(LegacyProjectConfigRootDirRelative + "/"))
+            {
+                path = ConfigRootDirRelative + path.Substring(LegacyProjectConfigRootDirRelative.Length);
                 EditorPrefs.SetString(PrefsLastProject, path);
             }
             if (!string.IsNullOrEmpty(path))

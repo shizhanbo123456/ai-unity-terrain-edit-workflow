@@ -1,2 +1,3 @@
-# 工具仓库只保存代码。地形生成元数据位于 Unity 项目的
-# Assets/TerrainGeneratorConfigs/，不在本嵌套仓库的路径范围内。
+# 地形生成元数据位于工具根目录，但是本地项目数据，不纳入工具代码版本控制。
+TerrainGeneratorConfigs/
+TerrainGeneratorConfigs.meta
