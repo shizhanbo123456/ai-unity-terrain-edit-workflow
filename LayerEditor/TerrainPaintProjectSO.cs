@@ -67,6 +67,9 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("层次图（配置文件夹内资产；区域编辑子界面的画布）")]
         public Texture2D layerMap;
 
+        [Tooltip("区域编辑绘画操作列表；LayerMap 由这些操作按顺序增量应用或完整重建")]
+        public List<LayerPaintOperation> paintOperations = new List<LayerPaintOperation>();
+
         // ---------- 高度编辑 ----------
 
         [Header("高度编辑")]

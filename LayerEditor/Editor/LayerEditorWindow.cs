@@ -124,6 +124,8 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
+        private int CurrentPaintLayerIndex => _erase ? 0 : _selectedLayer;
+
         private Color CurrentLayerColor
         {
             get
@@ -1218,6 +1220,21 @@ namespace AiTerrainWorkflow.LayerEditor
             if (_map != null)
                 return;
 
+            if (_project.paintOperations == null)
+                _project.paintOperations = new List<LayerPaintOperation>();
+
+            if (_project.paintOperations.Count > 0)
+            {
+                int operationResolution = Mathf.Clamp(_project.mapResolution, 128, 1024);
+                _map = new LayerMap(operationResolution, operationResolution);
+                _map.RebuildFromPaintOperations(
+                    operationResolution,
+                    operationResolution,
+                    _project.paintOperations,
+                    _project.layers);
+                return;
+            }
+
             var data = _project.ReadMap("layerMap");
             if (data != null && data.Length > 0)
             {
@@ -1275,8 +1292,15 @@ namespace AiTerrainWorkflow.LayerEditor
             GUILayout.Label($"尺寸 {_project.mapResolution}×{_project.mapResolution}", EditorStyles.miniLabel);
             if (GUILayout.Button("重置画布", EditorStyles.toolbarButton))
             {
-                _map.Resize(_project.mapResolution, _project.mapResolution);
+                Undo.RecordObject(_project, "重置区域绘画操作");
+                _project.paintOperations.Clear();
+                _map.RebuildFromPaintOperations(
+                    _project.mapResolution,
+                    _project.mapResolution,
+                    _project.paintOperations,
+                    _project.layers);
                 _triPoints.Clear();
+                EditorUtility.SetDirty(_project);
                 PersistLayerMap();
                 Repaint();
             }
@@ -1284,7 +1308,7 @@ namespace AiTerrainWorkflow.LayerEditor
             GUILayout.Space(8);
             if (GUILayout.Button("撤销", EditorStyles.toolbarButton))
             {
-                if (_map.Undo())
+                if (UndoLastPaintOperation())
                     PersistLayerMap();
             }
             if (GUILayout.Button("保存层次图", EditorStyles.toolbarButton))
@@ -2102,7 +2126,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             if (e.type == EventType.KeyDown && e.control && e.keyCode == KeyCode.Z)
             {
-                if (_map.Undo())
+                if (UndoLastPaintOperation())
                 {
                     PersistLayerMap();
                     Repaint();
@@ -2128,7 +2152,14 @@ namespace AiTerrainWorkflow.LayerEditor
                         var a = _triPoints[0];
                         var b = _triPoints[1];
                         var c = _triPoints[2];
-                        _map.FillTriangle(a.x, a.y, b.x, b.y, c.x, c.y, CurrentLayerColor32);
+                        AddAndApplyPaintOperation(new LayerPaintOperation
+                        {
+                            type = LayerPaintOperationType.Triangle,
+                            pointA = a,
+                            pointB = b,
+                            pointC = c,
+                            layerIndex = CurrentPaintLayerIndex,
+                        });
                         _triPoints.Clear();
                         PersistLayerMap(); // 三角形画完即写
                     }
@@ -2157,19 +2188,26 @@ namespace AiTerrainWorkflow.LayerEditor
                      && GUIUtility.hotControl == _canvasHotControl)
             {
                 _dragCurrentPx = ScreenToPix(e.mousePosition);
-                var color = CurrentLayerColor32;
-
                 if (_tool == Tool.CircleBrush)
                 {
-                    if (_dragStartPx == _dragCurrentPx)
-                        _map.FillCircle(_dragStartPx.x, _dragStartPx.y, _brushRadius, color);
-                    else
-                        _map.DrawLine(_dragStartPx.x, _dragStartPx.y, _dragCurrentPx.x, _dragCurrentPx.y,
-                            _brushRadius, color);
+                    AddAndApplyPaintOperation(new LayerPaintOperation
+                    {
+                        type = LayerPaintOperationType.Line,
+                        pointA = _dragStartPx,
+                        pointB = _dragCurrentPx,
+                        radius = _brushRadius,
+                        layerIndex = CurrentPaintLayerIndex,
+                    });
                 }
                 else if (_tool == Tool.RectFill)
                 {
-                    _map.FillRect(_dragStartPx.x, _dragStartPx.y, _dragCurrentPx.x, _dragCurrentPx.y, color);
+                    AddAndApplyPaintOperation(new LayerPaintOperation
+                    {
+                        type = LayerPaintOperationType.Rectangle,
+                        pointA = _dragStartPx,
+                        pointB = _dragCurrentPx,
+                        layerIndex = CurrentPaintLayerIndex,
+                    });
                 }
 
                 PersistLayerMap(); // 抬笔时写（圆形/直线/矩形均在本处收尾）
@@ -2178,6 +2216,31 @@ namespace AiTerrainWorkflow.LayerEditor
                 Repaint();
                 e.Use();
             }
+        }
+
+        private void AddAndApplyPaintOperation(LayerPaintOperation operation)
+        {
+            if (_project.paintOperations == null)
+                _project.paintOperations = new List<LayerPaintOperation>();
+            Undo.RecordObject(_project, "添加区域绘画操作");
+            _project.paintOperations.Add(operation);
+            _map.ApplyPaintOperation(operation, _project.layers);
+            EditorUtility.SetDirty(_project);
+        }
+
+        private bool UndoLastPaintOperation()
+        {
+            if (_project == null || _project.paintOperations == null || _project.paintOperations.Count == 0)
+                return false;
+            Undo.RecordObject(_project, "撤销区域绘画操作");
+            _project.paintOperations.RemoveAt(_project.paintOperations.Count - 1);
+            _map.RebuildFromPaintOperations(
+                _project.mapResolution,
+                _project.mapResolution,
+                _project.paintOperations,
+                _project.layers);
+            EditorUtility.SetDirty(_project);
+            return true;
         }
 
         private Vector2Int ScreenToPix(Vector2 screen)

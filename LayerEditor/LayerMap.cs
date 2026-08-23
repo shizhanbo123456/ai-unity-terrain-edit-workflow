@@ -5,6 +5,25 @@ using UnityEngine;
 
 namespace AiTerrainWorkflow.LayerEditor
 {
+    public enum LayerPaintOperationType
+    {
+        Line,
+        Rectangle,
+        Triangle,
+    }
+
+    /// <summary>区域编辑的一条可序列化绘画操作；点与半径均使用 LayerMap 像素坐标。</summary>
+    [Serializable]
+    public class LayerPaintOperation
+    {
+        public LayerPaintOperationType type;
+        public Vector2Int pointA;
+        public Vector2Int pointB;
+        public Vector2Int pointC;
+        public int radius;
+        public int layerIndex;
+    }
+
     /// <summary>
     /// 层图数据：一张 CPU 可读写的 RGBA32 图片（Color32[] 缓冲 + Texture2D 呈现）。
     ///
@@ -119,6 +138,34 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             PushUndo();
             StampLine(x0, y0, x1, y1, radius, color);
+            Apply();
+        }
+
+        /// <summary>把一条记录操作增量应用到当前 LayerMap。</summary>
+        public void ApplyPaintOperation(LayerPaintOperation operation, List<LayerConfigSO> layers)
+        {
+            if (operation == null)
+                throw new ArgumentNullException(nameof(operation));
+            ApplyPaintOperationToPixels(operation, layers);
+            Apply();
+        }
+
+        /// <summary>清空画布，并按列表顺序重新应用全部操作，完整重建 LayerMap。</summary>
+        public void RebuildFromPaintOperations(
+            int width,
+            int height,
+            IList<LayerPaintOperation> operations,
+            List<LayerConfigSO> layers)
+        {
+            Resize(width, height);
+            if (operations != null)
+            {
+                for (int i = 0; i < operations.Count; i++)
+                {
+                    if (operations[i] != null)
+                        ApplyPaintOperationToPixels(operations[i], layers);
+                }
+            }
             Apply();
         }
 
@@ -257,6 +304,60 @@ namespace AiTerrainWorkflow.LayerEditor
             _texture.wrapMode = TextureWrapMode.Clamp;
             _texture.SetPixels32(_pixels);
             _texture.Apply();
+        }
+
+        private void ApplyPaintOperationToPixels(
+            LayerPaintOperation operation,
+            List<LayerConfigSO> layers)
+        {
+            Color32 color = ResolveOperationColor(operation.layerIndex, layers);
+            Vector2Int a = operation.pointA;
+            Vector2Int b = operation.pointB;
+            Vector2Int c = operation.pointC;
+            switch (operation.type)
+            {
+                case LayerPaintOperationType.Line:
+                    StampLine(a.x, a.y, b.x, b.y, operation.radius, color);
+                    break;
+                case LayerPaintOperationType.Rectangle:
+                    StampRectangle(a.x, a.y, b.x, b.y, color);
+                    break;
+                case LayerPaintOperationType.Triangle:
+                    StampTriangle(a.x, a.y, b.x, b.y, c.x, c.y, color);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(operation.type));
+            }
+        }
+
+        private static Color32 ResolveOperationColor(int layerIndex, List<LayerConfigSO> layers)
+        {
+            if (layerIndex <= 0 || layers == null || layerIndex >= layers.Count || layers[layerIndex] == null)
+                return LayerPalette.Transparent;
+            return layers[layerIndex].color;
+        }
+
+        private void StampRectangle(int x0, int y0, int x1, int y1, Color32 color)
+        {
+            int minX = Mathf.Max(0, Mathf.Min(x0, x1));
+            int maxX = Mathf.Min(Width - 1, Mathf.Max(x0, x1));
+            int minY = Mathf.Max(0, Mathf.Min(y0, y1));
+            int maxY = Mathf.Min(Height - 1, Mathf.Max(y0, y1));
+            for (int y = minY; y <= maxY; y++)
+            for (int x = minX; x <= maxX; x++)
+                _pixels[y * Width + x] = color;
+        }
+
+        private void StampTriangle(int x0, int y0, int x1, int y1, int x2, int y2, Color32 color)
+        {
+            int minX = Mathf.Max(0, Mathf.Min(x0, Mathf.Min(x1, x2)));
+            int maxX = Mathf.Min(Width - 1, Mathf.Max(x0, Mathf.Max(x1, x2)));
+            int minY = Mathf.Max(0, Mathf.Min(y0, Mathf.Min(y1, y2)));
+            int maxY = Mathf.Min(Height - 1, Mathf.Max(y0, Mathf.Max(y1, y2)));
+            for (int y = minY; y <= maxY; y++)
+            for (int x = minX; x <= maxX; x++)
+                if (PointInTriangle(x, y, x0, y0, x1, y1, x2, y2))
+                    _pixels[y * Width + x] = color;
         }
 
         private void PushUndo()
