@@ -6,12 +6,10 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 单个层级配置（每个层级一个 SO 资产，由总 SO TerrainPaintProjectSO 持有）。
     ///
-    /// 层级数量 2~16（Layer0 恒为透明过渡层）。字段按四个子界面用 Header 划分专属配置：
+    /// 层级数量 2~16（Layer0 恒为透明过渡层）。
     ///   - 区域编辑：颜色（层次图该层像素颜色）与名称（语义文本）——只读，需在 Inspector 修改
     ///   - 贴图编辑：自然/道路 TerrainLayer 权重列表 + 道路生成参数（用于信息生成计算）
     ///   - 高度编辑：高度范围（heightRange，烘焙高度图时用）
-    ///   - 树木编辑：权重（treeWeights）+ 密度（treeDensity）+ 缩放（treeScale）+ 最小离路距离（treeRoadDistanceLimit）
-    ///   - 细节编辑：权重（detailWeights）+ 密度（detailDensity）+ 缩放（detailScale）+ 最小离路距离（detailRoadDistanceLimit）
     /// 注：邻接层级（组合分组）已移至全局配置 TerrainPaintProjectSO.adjacencyGroups。
     /// </summary>
     public class LayerConfigSO : ScriptableObject
@@ -47,41 +45,11 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("该层级的预期高度范围 (min, max)。烘焙高度图时，噪声在该范围内插值生成高度值。")]
         public Vector2 heightRange = new Vector2(0f, 1f);
 
-        // ---------- 树木编辑（暂无） ----------
-
-        // ---------- 细节编辑（暂无） ----------
-
-        // ---------- 树木编辑 ----------
-
-        [Header("树木编辑")]
-        [Tooltip("树木生成权重：索引 = TerrainPaintProjectSO.treePrefabs 池 id，值 = 权重（0 = 不生成）。")]
-        public List<int> treeWeights = new List<int>();
-        [Tooltip("树木密度（个/平方米）：区块内按该层面积生成树木数量")]
-        public float treeDensity = 0.05f;
-        [Tooltip("树木随机缩放范围（min~max，均匀缩放）")]
-        public Vector2 treeScale = new Vector2(0.8f, 1.2f);
-        [Tooltip("树木最小离路距离（米）：距最近道路（offRoad 距离场）小于该值的位置不生成树木；0 = 不限制。")]
-        public float treeRoadDistanceLimit = 3f;
-
-        // ---------- 细节编辑 ----------
-
-        [Header("细节编辑")]
-        [Tooltip("细节生成权重：索引 = TerrainPaintProjectSO.detailPrefabs 池 id，值 = 权重（0 = 不生成）。")]
-        public List<int> detailWeights = new List<int>();
-        [Tooltip("细节密度（个/平方米）：区块内按该层面积生成细节数量")]
-        public float detailDensity = 2f;
-        [Tooltip("细节随机缩放范围（min~max，均匀缩放）")]
-        public Vector2 detailScale = new Vector2(0.8f, 1.2f);
-        [Tooltip("细节最小离路距离（米）：距最近道路（offRoad 距离场）小于该值的位置不生成细节；0 = 不限制。默认小于树的 treeRoadDistanceLimit。")]
-        public float detailRoadDistanceLimit = 1f;
-
-        /// <summary>同步自然/道路/树木/细节权重列表长度与各池对齐（截断或补零）。</summary>
-        public void SyncWeightLists(int naturalPoolCount, int roadPoolCount, int treePoolCount, int detailPoolCount)
+        /// <summary>同步自然/道路权重列表长度与各 TerrainLayer 池对齐（截断或补零）。</summary>
+        public void SyncWeightLists(int naturalPoolCount, int roadPoolCount)
         {
             SyncListLength(naturalLayerWeights, naturalPoolCount);
             SyncListLength(roadLayerWeights, roadPoolCount);
-            SyncListLength(treeWeights, treePoolCount);
-            SyncListLength(detailWeights, detailPoolCount);
         }
 
         private static void SyncListLength(List<int> list, int count)

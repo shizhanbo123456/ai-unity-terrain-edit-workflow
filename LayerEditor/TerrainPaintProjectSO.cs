@@ -44,7 +44,7 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 编辑器窗口的所有信息都从本 SO 加载（窗口本身不存储持久数据）。
     /// TerrainPaintConfig（全局参数）是本 SO 的一部分；层级配置在各自的 LayerConfigSO 中。
     ///
-    /// 字段按四个子界面用 Header 划分专属配置：
+    /// 字段按区域、高度、贴图、散布、摆件和定点工作流划分：
     ///   - 区域编辑：层次图（layerMap，绘画画布）
     ///   - 高度编辑：heightSeed / heightScale / smoothStep / smoothIterations
     ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
@@ -138,36 +138,6 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("定点生成组；资产存放在当前项目配置目录的 FixedPointConfig 子目录")]
         public List<FixedPointConfigSO> fixedPointGroups = new List<FixedPointConfigSO>();
 
-        // ---------- 旧树木/细节配置（兼容已有资产，不再由新散布工作流使用） ----------
-
-        [HideInInspector]
-        [Tooltip("树木位置生成用的全局种子（TreeSeed，不细化到层级）")]
-        public int treeSeed = 0;
-        [HideInInspector]
-        [Tooltip("树木区块尺寸（米，x/z）：构建时按区块划分生成树木的粒度")]
-        public Vector2 treeChunkSize = new Vector2(16f, 16f);
-        [HideInInspector]
-        [Tooltip("树木可见距离（米）：区块中心距观察点（TerrainBuilder.SetCameraPosition）超过该值则回收隐藏")]
-        public float treeVisibleDistance = 60f;
-        [HideInInspector]
-        [Tooltip("树木/植被 Prefab 池（树木编辑 · 全局配置中的物理列表）")]
-        public List<GameObject> treePrefabs = new List<GameObject>();
-
-        // ---------- 细节编辑 ----------
-
-        [HideInInspector]
-        [Tooltip("细节位置生成用的全局种子（DetailSeed，不细化到层级）")]
-        public int detailSeed = 0;
-        [HideInInspector]
-        [Tooltip("细节区块尺寸（米，x/z）：构建时按区块划分生成细节的粒度")]
-        public Vector2 detailChunkSize = new Vector2(8f, 8f);
-        [HideInInspector]
-        [Tooltip("细节可见距离（米）：区块中心距观察点（TerrainBuilder.SetCameraPosition）超过该值则回收隐藏")]
-        public float detailVisibleDistance = 40f;
-        [HideInInspector]
-        [Tooltip("细节网格/草 Prefab 池（细节编辑 · 全局配置中的物理列表）")]
-        public List<GameObject> detailPrefabs = new List<GameObject>();
-
         // ---------- MapData 栅格数据（存储层） ----------
 
         /// <summary>MapData 子目录名（位于配置文件夹下）。</summary>
@@ -194,19 +164,17 @@ namespace AiTerrainWorkflow.LayerEditor
         // ---------- 辅助方法 ----------
 
         /// <summary>
-        /// 同步所有层级 SO 的自然/道路/树木/细节权重列表长度，使其与四个池对齐。
+        /// 同步所有层级 SO 的自然/道路权重列表长度，使其与两个 TerrainLayer 池对齐。
         /// 添加 / 删除 / 重排池元素后调用（截断或补零）。
         /// </summary>
         public void SyncAllLayerWeights()
         {
             int natCount = naturalTerrainLayers.Count;
             int roadCount = roadTerrainLayers.Count;
-            int treeCount = treePrefabs.Count;
-            int detailCount = detailPrefabs.Count;
             foreach (var layer in layers)
             {
                 if (layer == null) continue;
-                layer.SyncWeightLists(natCount, roadCount, treeCount, detailCount);
+                layer.SyncWeightLists(natCount, roadCount);
             }
         }
 

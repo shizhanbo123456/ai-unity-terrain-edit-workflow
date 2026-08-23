@@ -6,15 +6,15 @@ namespace AiTerrainWorkflow.LayerEditor
 {
     /// <summary>
     /// 构建端组件：接收主配置 SO，将一个真实 Terrain 构建为工作流编辑器中的样子
-    /// （高度 / 纹理 / 植被 / 树 + 实例化摆件，详见 README「阶段 7 · TerrainBuilder 构建」）。
+    /// （高度 / 贴图 / 散布 / 摆件 / 定点，详见 README「完整生成逻辑伪代码」）。
     ///
-    /// 当前已实现：树木 / 细节的**按区块动态生成与回收**——Build 时初始化两个区块管理器
-    /// （<see cref="ChunkUpdateManager"/>，参数从主配置读取）与对象池（key 自增）；
+    /// 当前已实现：散布生成组的**按区块动态生成与回收**——Build 时按组初始化区块管理器
+    /// （<see cref="ChunkUpdateManager"/>）与对象池；
     /// 由 <see cref="SetCameraPosition"/> 驱动：区块中心进入可见距离则按生成参数生成并填充，
-    /// 超出则回收物体到对象池。其余构建步骤（高度 / 纹理 / 摆件）后续实现。
+    /// 超出则回收物体到对象池。其余构建步骤（高度 / 贴图 / 摆件 / 定点）待实现。
     ///
     /// 对象池约定：
-    ///   - 每个树 / 细节原型分配唯一自增 key（= prefab 池索引），物体 name = key.ToString()，
+    ///   - 每个散布 Prefab 分配唯一 key（= 组内 Prefab 池索引），物体 name = key.ToString()，
     ///     回收时按物体名称解析出池 key；
     ///   - 全部实例挂在隐藏容器（HideFlags.HideInHierarchy）下，**Hierarchy 面板不显示**；
     ///   - 取出 / 新建时 SetActive(true)，放回池时 SetActive(false)。
@@ -55,8 +55,7 @@ namespace AiTerrainWorkflow.LayerEditor
         private float _wppZ = 1f;
 
         /// <summary>
-        /// 构建：缓存 MapData、按主配置初始化树木 / 细节区块管理器与对象池。
-        /// 其余构建步骤（PrepareTerrain / ApplyHeight / ApplyAlphamap / PlaceProps / PostProcess）后续实现。
+        /// 构建：创建本次 MapData 内存会话，并从高度到 applyThrough 按顺序应用各阶段。
         /// 注意：当前实现假定单次 Build；重复 Build 需先自行回收全部已生成物体。
         /// </summary>
         public void Build(TerrainPaintProjectSO projectConfig, Terrain terrain, TerrainWorkflowStage applyThrough)
@@ -92,7 +91,7 @@ namespace AiTerrainWorkflow.LayerEditor
         {
         }
 
-        /// <summary>初始化散布阶段当前已有的树木/细节流式生成能力。</summary>
+        /// <summary>初始化各散布生成组的流式区块与对象池。</summary>
         private void ApplyScatter()
         {
             var projectConfig = _config;
@@ -110,7 +109,7 @@ namespace AiTerrainWorkflow.LayerEditor
             _wppX = terrain.terrainData.size.x / Mathf.Max(1, mapW - 1);
             _wppZ = terrain.terrainData.size.z / Mathf.Max(1, mapH - 1);
 
-            // 隐藏容器：Hierarchy 面板不显示（子树全部不显示）
+            // 隐藏容器：Hierarchy 面板不显示（所有后代节点也不显示）
             if (_poolRoot == null)
             {
                 var go = new GameObject("_TerrainBuilderPools");
@@ -169,7 +168,7 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>
-        /// 观察点移动到 pos（Vector2(x, z)）：按树木 / 细节各自的可见距离，
+        /// 观察点移动到 pos（Vector2(x, z)）：按各散布生成组的可见距离，
         /// 激活新进入范围的区块（生成物体）、回收离开范围的区块（物体放回对象池）。
         /// </summary>
         public void SetCameraPosition(Vector2 pos)
@@ -210,7 +209,7 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         /// <summary>
-        /// 生成单个区块内的树木 / 细节：
+        /// 生成单个散布区块：
         /// 世界范围 → 像素范围 → 收集合法像素（语义层 lid≥1、非道路、offRoad ≥ 对应离路限制）
         /// → 区块 seed = 全局 seed ⊕ 区块 index → 按层密度洗牌取位 → 按权重选原型 → 从对象池取出并摆放
         /// （高度 = Terrain.SampleHeight，位置 = 像素中心 × 实际 worldPerPixel + Terrain 原点）。
@@ -222,7 +221,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (!_dataWarned)
                 {
                     _dataWarned = true;
-                    Debug.LogWarning("[TerrainBuilder] MapData（layerMap/road/offRoad）缺失，跳过树木/细节生成。请先在工作流窗口烘焙贴图。");
+                    Debug.LogWarning("[TerrainBuilder] MapData（layerMap/road/offRoad）缺失，跳过散布生成。");
                 }
                 return;
             }
