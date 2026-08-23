@@ -1,3 +1,7 @@
 # 地形生成元数据位于工具根目录，但是本地项目数据，不纳入工具代码版本控制。
 TerrainGeneratorConfigs/
 TerrainGeneratorConfigs.meta
+
+# 备用 Prefab、Billboard 图片和派生材质均为本地生成产物。
+Generated/
+Generated.meta

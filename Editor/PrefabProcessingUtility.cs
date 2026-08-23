@@ -13,10 +13,12 @@ namespace AiTerrainWorkflow.Editor
     public static class PrefabProcessingUtility
     {
         public const string WorkflowRoot = "Assets/ai-unity-terrain-edit-workflow";
+        public const string GeneratedRoot = WorkflowRoot + "/Generated";
+        public const string CandidatePrefabDirectory = GeneratedRoot + "/Prefabs";
         public const string BillboardOutputDirectory =
-            "Assets/ai-unity-terrain-edit-workflow/Billboards";
+            GeneratedRoot + "/Billboards";
         public const string BillboardMaterialDirectory =
-            "Assets/ai-unity-terrain-edit-workflow/Billboards/Materials";
+            GeneratedRoot + "/Materials";
         private const string BillboardTemplateMaterialPath =
             "Assets/ai-unity-terrain-edit-workflow/src/billboard.mat";
         private const string CrossPlaneModelPath =
@@ -35,7 +37,7 @@ namespace AiTerrainWorkflow.Editor
 
             string path = AssetDatabase.GetAssetPath(prefab).Replace('\\', '/');
             if (string.IsNullOrEmpty(path) ||
-                !path.StartsWith(WorkflowRoot + "/", StringComparison.OrdinalIgnoreCase))
+                !path.StartsWith(CandidatePrefabDirectory + "/", StringComparison.OrdinalIgnoreCase))
             {
                 reason = "Prefab 不在工具目录内，请先通过“批量添加备用预制体”处理";
                 return false;
@@ -85,11 +87,24 @@ namespace AiTerrainWorkflow.Editor
             }
 
             string prefabName = Path.GetFileNameWithoutExtension(sourcePath);
-            string outputPath = WorkflowRoot + "/" + prefabName + ".prefab";
+            EnsureAssetFolder(CandidatePrefabDirectory);
+            string outputPath = CandidatePrefabDirectory + "/" + prefabName + ".prefab";
             if (string.Equals(sourcePath, outputPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("源 Prefab 已位于候选 Prefab 输出位置，不能包装自身: " + outputPath);
-            if (AssetDatabase.LoadAssetAtPath<GameObject>(outputPath) != null)
-                throw new InvalidOperationException("同名候选 Prefab 已存在，不会自动覆盖: " + outputPath);
+            var existingCandidate = AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
+            if (existingCandidate != null)
+            {
+                if (!WrapsSourcePrefab(existingCandidate, sourcePath))
+                    throw new InvalidOperationException(
+                        "同名备用 Prefab 已存在，但它包装的不是当前源 Prefab: " + outputPath);
+                PrefabStructureInfo.UpdatePrefabStructure(
+                    existingCandidate,
+                    billboardMode,
+                    twoPointHeightAdaptation);
+                if (billboardMode != BillboardMode.None)
+                    UpdateBillboard(outputPath, billboardMode);
+                return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
+            }
 
             GameObject wrapperRoot = null;
             try
@@ -123,7 +138,20 @@ namespace AiTerrainWorkflow.Editor
                 billboardMode,
                 twoPointHeightAdaptation);
 
+            if (billboardMode != BillboardMode.None)
+                UpdateBillboard(outputPath, billboardMode);
+
             return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
+        }
+
+        private static bool WrapsSourcePrefab(GameObject candidate, string expectedSourcePath)
+        {
+            if (candidate == null || candidate.transform.childCount == 0)
+                return false;
+            var child = candidate.transform.GetChild(0).gameObject;
+            var source = PrefabUtility.GetCorrespondingObjectFromSource(child);
+            string actualPath = source != null ? AssetDatabase.GetAssetPath(source) : null;
+            return string.Equals(actualPath, expectedSourcePath, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -144,23 +172,7 @@ namespace AiTerrainWorkflow.Editor
 
                 try
                 {
-                    var result = PrefabBillboardCommand.Billboard(
-                        new BridgeContext(),
-                        new BridgeArgs
-                        {
-                            path = prefabPath,
-                            output = BillboardOutputDirectory,
-                            cameraPosition = new[] { 0f, 0f, 1f },
-                            pixelsPerMeter = 100f,
-                        }) as PrefabBillboardResult;
-                    if (result == null)
-                        throw new InvalidOperationException("prefab.billboard 未返回 PrefabBillboardResult");
-
-                    string texturePath = BillboardOutputDirectory + "/" +
-                                         Path.GetFileNameWithoutExtension(prefabPath) + ".png";
-                    AssetDatabase.Refresh();
-                    AssetDatabase.ImportAsset(texturePath, ImportAssetOptions.ForceSynchronousImport);
-                    AttachBillboard(prefabPath, info.billboardMode, texturePath, result);
+                    UpdateBillboard(prefabPath, info.billboardMode);
                     updated++;
                 }
                 catch (Exception exception)
@@ -216,7 +228,9 @@ namespace AiTerrainWorkflow.Editor
 
         private static string[] FindCandidatePrefabPaths()
         {
-            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { WorkflowRoot });
+            if (!AssetDatabase.IsValidFolder(CandidatePrefabDirectory))
+                return Array.Empty<string>();
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { CandidatePrefabDirectory });
             var paths = new System.Collections.Generic.List<string>(guids.Length);
             foreach (string guid in guids)
             {
@@ -226,6 +240,28 @@ namespace AiTerrainWorkflow.Editor
                     paths.Add(path);
             }
             return paths.ToArray();
+        }
+
+        private static void UpdateBillboard(string prefabPath, BillboardMode mode)
+        {
+            EnsureAssetFolder(BillboardOutputDirectory);
+            var result = PrefabBillboardCommand.Billboard(
+                new BridgeContext(),
+                new BridgeArgs
+                {
+                    path = prefabPath,
+                    output = BillboardOutputDirectory,
+                    cameraPosition = new[] { 0f, 0f, 1f },
+                    pixelsPerMeter = 100f,
+                }) as PrefabBillboardResult;
+            if (result == null)
+                throw new InvalidOperationException("prefab.billboard 未返回 PrefabBillboardResult");
+
+            string texturePath = BillboardOutputDirectory + "/" +
+                                 Path.GetFileNameWithoutExtension(prefabPath) + ".png";
+            AssetDatabase.Refresh();
+            AssetDatabase.ImportAsset(texturePath, ImportAssetOptions.ForceSynchronousImport);
+            AttachBillboard(prefabPath, mode, texturePath, result);
         }
 
         private static bool BoundsAreAllZero(PrefabStructureInfo info)

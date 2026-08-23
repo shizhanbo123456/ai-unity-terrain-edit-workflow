@@ -534,9 +534,10 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - 散布、摆件、定点三个摆放模块只能引用经 `PrefabProcessingUtility.BuildCandidatePrefab` 处理的备用 Prefab，不能直接引用原始素材 Prefab。
 - 备用 Prefab 必须位于 `Assets/ai-unity-terrain-edit-workflow/` 内，根节点必须挂有 `PrefabStructureInfo`，且根 Transform 必须为 position `(0,0,0)`、rotation identity、scale `(1,1,1)`。
 - 备用 Prefab 使用空的标准根节点包装原始 Prefab；原始素材只作为嵌套 Prefab 被引用，工具不会修改原始 Prefab。
-- 工具产生的主配置、生成组、MapData、备用 Prefab 和 Billboard 全部保存在 `Assets/ai-unity-terrain-edit-workflow/` 内。删除该工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
+- 工具产生的主配置、生成组和 MapData 保存在工具内的 `TerrainGeneratorConfigs/`；所有备用 Prefab、Billboard 图片和派生材质集中保存在 `Generated/`，不会直接散落在工具根目录。删除工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
 - `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。
-- 批量更新 Billboard 固定从 `(0,0,1)` 截图，为每个备用 Prefab 在 `Billboards/Materials/` 创建独立材质，使用 `src/billboard.mat`（双面、不投射/接收阴影）为模板，并自动装入 `src` 中对应的十字/一字面片。
+- 批量添加在 BillboardMode 非 None 时会立即完成截图、材质、面片和 LOD 装配；批量更新 Billboard 可在之后统一重建。截图固定来自 `(0,0,1)`，每个备用 Prefab 使用 `src/billboard.mat` 为模板创建独立双面无阴影材质，并自动装入 `src` 中对应的十字/一字面片。
+- 生成目录固定为：`Generated/Prefabs/`（备用 Prefab）、`Generated/Billboards/`（PNG）、`Generated/Materials/`（派生材质）。`Generated/` 已从工具源码版本控制中排除。
 - Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1。
 - 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
 - 应用页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds。
