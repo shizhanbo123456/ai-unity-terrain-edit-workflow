@@ -1,6 +1,7 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
 using System.IO;
+using AiTerrainWorkflow.Editor;
 using UnityEditor;
 using UnityEngine;
 
@@ -577,7 +578,42 @@ namespace AiTerrainWorkflow.LayerEditor
                     ApplyWorkflowToTerrain();
             }
 
+            EditorGUILayout.Space(14);
+            EditorGUILayout.LabelField("备用预制体处理", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "批量处理工作流目录下根节点挂有 PrefabStructureInfo 的备用预制体。" +
+                "Billboard 仅处理已启用生成标记的对象；普通包围盒更新会跳过已有数据的对象。",
+                MessageType.Info);
+
+            if (GUILayout.Button("批量更新 Billboard", GUILayout.Height(24f)))
+                RunCandidatePrefabBatch("Billboard", PrefabProcessingUtility.UpdateAllBillboards);
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("更新包围盒", GUILayout.Height(24f)))
+                    RunCandidatePrefabBatch("包围盒", () => PrefabProcessingUtility.UpdateAllBounds(false));
+
+                if (GUILayout.Button("强制更新包围盒", GUILayout.Height(24f)))
+                    RunCandidatePrefabBatch("包围盒（强制）", () => PrefabProcessingUtility.UpdateAllBounds(true));
+            }
+
             EditorGUILayout.EndScrollView();
+        }
+
+        private void RunCandidatePrefabBatch(string operation, System.Func<int> action)
+        {
+            try
+            {
+                int count = action();
+                string message = $"{operation}更新完成：{count} 个备用预制体";
+                Debug.Log("[Terrain Paint Workflow] " + message);
+                ShowNotification(new GUIContent(message));
+            }
+            catch (System.Exception exception)
+            {
+                Debug.LogError($"[Terrain Paint Workflow] {operation}批量更新失败\n{exception}");
+                EditorUtility.DisplayDialog("批量更新失败", exception.Message, "确定");
+            }
         }
 
         private void ApplyWorkflowToTerrain()
