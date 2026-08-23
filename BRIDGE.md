@@ -19,24 +19,18 @@ python python\workflow_bridge.py --help
 复制并修改 `python/manifest.example.json`，随后运行：
 
 ```powershell
-python python\workflow_bridge.py run --manifest python\manifest.example.json
+python python\workflow_bridge.py run python\manifest.example.json
 ```
 
 `run` 按以下顺序执行：创建或加载项目、构建备用 Prefab、写入工作流配置与生成组、重建区域操作、烘焙派生 MapData、校验 Prefab/LOD/根变换，并在 manifest 指定 `terrain` 时构建真实 Terrain。校验失败时 CLI 返回退出码 2，并输出逐项错误。
 
-也可以逐步运行：
+只导入配置但不烘焙和构建时使用：
 
 ```powershell
-python python\workflow_bridge.py project-create Demo --resolution 512
 python python\workflow_bridge.py configure config.json --project Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/Demo/Demo.asset
-python python\workflow_bridge.py prefab-build Assets/Tree.prefab --billboard-mode CrossPlanes --two-point-height
-python python\workflow_bridge.py prefab-update-bounds --force
-python python\workflow_bridge.py prefab-update-billboards
-python python\workflow_bridge.py area-rebuild Assets/.../Demo.asset operations.json
-python python\workflow_bridge.py bake Assets/.../Demo.asset
-python python\workflow_bridge.py validate Assets/.../Demo.asset
-python python\workflow_bridge.py build Assets/.../Demo.asset --terrain Terrain --through FixedPointEdit
 ```
+
+Python CLI 刻意只提供 `configure` 和 `run` 两个入口。命令行侧不提供单字段 set/add/remove 命令；要修改任何工作流配置，必须编辑完整 JSON 后重新导入。这样 JSON 是可审查、可复现的唯一外部配置来源，不会出现一长串参数命令或部分更新语义。
 
 Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备用 Prefab 会强制根节点 position/rotation/scale 为 `(0,0,0)`、`(0,0,0)`、`(1,1,1)`。
 
@@ -44,46 +38,34 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 
 | 命令 | 主要参数 | 用途 |
 |---|---|---|
-| `workflow.project.create` | `name`, `width` | 创建项目及 16 个图层资产 |
-| `workflow.configure` | `path`, `message` | 以 manifest 配置已有项目 |
+| `workflow.configure` | `path`, `message` | 用完整 manifest 创建或整体覆盖配置（唯一配置写命令） |
 | `workflow.prefab.build` | `path`, `type`, `placed` | 构建单个备用 Prefab |
 | `workflow.prefab.update_bounds` | `active` | 批量更新 Bounds；`active=true` 强制 |
 | `workflow.prefab.update_billboards` | 无 | 批量刷新启用的 Billboard |
-| `workflow.area.rebuild` | `path`, `message` | 替换绘画操作并完整重建 LayerMap |
 | `workflow.bake` | `path`, `active` | 烘焙区域或全部派生图 |
 | `workflow.validate` | `path` | 执行应用前校验 |
 | `workflow.build` | `path`, `terrain`, `type` | 构建到场景 Terrain |
 | `workflow.run` | `path`, `message` | 完整 manifest 流程 |
 
-Python CLI 只是这些命令的稳定参数适配层；复杂结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。
+其余原生命令只处理生成资产、派生数据、校验或执行构建，不用于修改工作流配置。Python CLI 只暴露 `workflow.configure` 与 `workflow.run`；完整结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。
 
 ## Manifest
 
-示例文件覆盖以下配置：
+`python/manifest.example.json` 是完整模板，不是只展示常用字段的片段。C# 会拒绝缺少必需顶层集合或不是完整 16 层的 manifest，防止遗漏字段时把默认值误当成用户配置。模板覆盖：
 
 - `projectName`、`resolution`、`projectPath`：项目创建或定位。
-- `terrainLayers`、`layers`、`adjacencyGroups`：材质池、16 层规则和相邻层组合。
-- `scatterGroups`、`propGroups`、`fixedPointGroups`：三个摆放模块。
+- 高度噪声、平滑参数，以及 `paintConfig` 中的道路随机游走、混合噪声和世界/像素预览比例。
+- `naturalTerrainLayers`、`roadTerrainLayers`、完整 16 个 `layers`（含道路重映射曲线）、`adjacencyGroups`。
+- `scatterGroups`、`propGroups`、`fixedGroups`：三个摆放模块的全部当前字段。
 - `prefabs`：需要先处理的源 Prefab 及 Billboard/两点适高选项。
 - `areaOperations`：`Line`（两点+半径）、`Rectangle`（两点）、`Triangle`（三点）的有序操作列表；坐标为 LayerMap 像素。
 - `bake`：是否重建全部派生图；否则只重建 LayerMap。
 - `terrain`、`applyThrough`：可选场景 Terrain 与最终应用阶段。
 
-最小区域操作文件也可以单独传给 `area-rebuild`：
-
-```json
-{
-  "operations": [
-    { "type": "Line", "layerIndex": 1, "a": [20,20], "b": [200,180], "radius": 8 },
-    { "type": "Rectangle", "layerIndex": 2, "a": [40,40], "b": [100,90] }
-  ]
-}
-```
-
 距离约定：只有区域绘画坐标和半径使用像素；高度、道路宽度、散布间距、摆件间距等配置均按世界米解释。构建时由 Terrain 尺寸与 MapData 分辨率换算世界米/像素。
 
 ## 自动化建议
 
-- 先执行 `validate` 再执行 `build`；`run` 已内置该顺序。
+- 使用 `run` 完成 Prefab 处理、烘焙、校验与可选 Terrain 构建；它已内置正确顺序。
 - 生成组引用应指向处理后的 `Generated/Prefabs` 资产。若同一个 manifest 同时声明 `prefabs` 和生成组引用，`run` 会先创建备用 Prefab 再解析引用。
-- 命令会保存工作流自身的资产；不会改写源 Prefab。场景 Terrain 构建属于显式操作，只在 `build` 或带 `terrain` 的 `run` 中发生。
+- 命令会保存工作流自身的资产；不会改写源 Prefab。只有 manifest 的 `terrain` 非空时，`run` 才会修改场景 Terrain。

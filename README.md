@@ -17,7 +17,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.4**（
 | 构建端分离 | 运行时/编辑器都靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/散布/摆件/定点） |
 | bridge 按需 | `unity-python-bridge` 只是按需取用的外围工具（量尺寸/截图/可选一键构建），**不参与主链路** |
 
-现已提供完整的工作流专属 bridge 命令与 Python CLI，可创建/配置项目、处理 Prefab、重建区域、烘焙、校验并构建 Terrain；使用方式和 manifest 格式见 [BRIDGE.md](BRIDGE.md)。
+现已提供完整 manifest 驱动的工作流 bridge 与 Python CLI。命令行修改配置的唯一方式是编辑完整 JSON 并由 C# 整体读取；不提供单字段修改命令。模板和使用方式见 [BRIDGE.md](BRIDGE.md)。
 
 ## 名词解释
 
@@ -549,7 +549,7 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 ## 与 unity-python-bridge 的关系 [已完成]
 
 - bridge 仍不参与 Unity 编辑器主链路；本项目通过项目内 Editor 扩展注册命令，依赖 bridge 而不修改它。
-- `workflow.*` 覆盖项目创建/配置、Prefab 处理、区域重建、派生图烘焙、应用前校验和 Terrain 构建，并提供一条完整的 `workflow.run`。
+- `workflow.configure` 是唯一配置写入口，`workflow.run` 读取同一份完整 JSON 并继续完成 Prefab 处理、区域重建、派生图烘焙、应用前校验和 Terrain 构建。
 - Python CLI、命令参数及 manifest 说明见 [BRIDGE.md](BRIDGE.md)。关掉 bridge 时 Unity 编辑器工作流照常使用。
 
 ## 实施里程碑
@@ -558,7 +558,7 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - **M2 [已完成]** 散布生成组配置编辑（区块、可见距离、Prefab 权重池、密度、缩放、离路范围、目标层级）及分组流式生成。
 - **M3 [已完成]** TerrainBuilder 高度、构建时 alphamap、全区块散布位置预计算及对象池流式生成已完成。
 - **M4 [已完成]** 摆件和定点生成组配置、预览与实际应用已完成。
-- **M5 [已完成]** bridge 可选集成：完整命令集、manifest 驱动的一键构建与 Python CLI。
+- **M5 [已完成]** bridge 可选集成：完整 JSON 配置模板、整体导入和 manifest 驱动的一键构建。
 
 ## 待拍板事项（已收敛）
 

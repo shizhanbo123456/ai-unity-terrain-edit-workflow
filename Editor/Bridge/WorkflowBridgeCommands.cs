@@ -22,6 +22,20 @@ namespace AiTerrainWorkflow.Editor.Bridge
 
     [Serializable] public sealed class IntGroupSpec { public int[] values; }
     [Serializable] public sealed class WeightedPrefabSpec { public string path; public int weight = 1; public int minimumCount; }
+    [Serializable] public sealed class CurveKeySpec { public float time; public float value; public float inTangent; public float outTangent; public float inWeight; public float outWeight; public int weightedMode; }
+    [Serializable]
+    public sealed class PaintConfigSpec
+    {
+        public float roadStep = 2f;
+        public int walkStartTries = 10;
+        public int walkCandidateCount = 8;
+        public int startCoverStopSamples = 8;
+        public int walkSeed;
+        public int maxStepsPerPath = 256;
+        public float gApplySpacing = 3f;
+        public float noiseScale = 1f;
+        public float worldPerPixel = 0.4f;
+    }
     [Serializable]
     public sealed class LayerSpec
     {
@@ -32,6 +46,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public bool generateRoad = true;
         public float roadWidth = 2f;
         public float roadSpacingMin = 4f;
+        public CurveKeySpec[] roadFinalRemap;
         public int[] naturalWeights;
         public int[] roadWeights;
     }
@@ -83,6 +98,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
     [Serializable]
     public sealed class FixedGroupSpec
     {
+        public float[] markerColor;
         public string prefab;
         public float[] positions;
         public float rotation;
@@ -96,11 +112,13 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public int resolution = 512;
         public int heightSeed;
         public float heightScale = 1f;
+        public int smoothStep = 1;
+        public int smoothIterations;
+        public PaintConfigSpec paintConfig;
         public int naturalSeed;
         public int roadSeed;
         public int scatterSeed;
         public int propSeed;
-        public float previewWorldPerPixel = 0.4f;
         public string[] naturalTerrainLayers;
         public string[] roadTerrainLayers;
         public LayerSpec[] layers;
@@ -119,19 +137,13 @@ namespace AiTerrainWorkflow.Editor.Bridge
     {
         private const string ConfigRoot = "Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs";
 
-        [BridgeCommand("workflow.project.create", "创建工作流项目。参数: name, width(128/256/512/1024)")]
-        public static object CreateProject(BridgeContext context, BridgeArgs args)
-        {
-            int resolution = args.width > 0 ? args.width : 512;
-            TerrainPaintProjectSO project = CreateProjectAsset(args.name, resolution);
-            return Result("project.create", AssetDatabase.GetAssetPath(project), "created", 1);
-        }
-
-        [BridgeCommand("workflow.configure", "用 message 中的 JSON manifest 配置项目资产与生成组")]
+        [BridgeCommand("workflow.configure", "以 message 中的完整 JSON manifest 覆盖工作流配置；这是唯一配置写入口")]
         public static object Configure(BridgeContext context, BridgeArgs args)
         {
             WorkflowManifest manifest = ParseManifest(args.message);
+            ValidateCompleteManifest(manifest);
             TerrainPaintProjectSO project = ResolveOrCreateProject(args.path, manifest);
+            foreach (PrefabSpec spec in manifest.prefabs) BuildPrefabSpec(spec);
             ApplyManifest(project, manifest);
             SaveProject(project);
             return Result("configure", AssetDatabase.GetAssetPath(project), "configured", 1);
@@ -159,17 +171,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
         {
             int count = PrefabProcessingUtility.UpdateAllBillboards();
             return Result("prefab.update_billboards", null, "updated", count);
-        }
-
-        [BridgeCommand("workflow.area.rebuild", "用 message JSON 操作数组完整重建区域图。参数: path=项目")]
-        public static object RebuildArea(BridgeContext context, BridgeArgs args)
-        {
-            TerrainPaintProjectSO project = LoadProject(args.path);
-            PaintOperationSpec[] operations = ParseOperations(args.message);
-            SetAreaOperations(project, operations);
-            BakeArea(project);
-            SaveProject(project);
-            return Result("area.rebuild", AssetDatabase.GetAssetPath(project), "rebuilt", operations.Length);
         }
 
         [BridgeCommand("workflow.bake", "重建 layerMap，并烘焙 height/distance/occupancy/road/offRoad。参数: path=项目")]
@@ -213,12 +214,12 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public static object Run(BridgeContext context, BridgeArgs args)
         {
             WorkflowManifest manifest = ParseManifest(args.message);
+            ValidateCompleteManifest(manifest);
             TerrainPaintProjectSO project = ResolveOrCreateProject(args.path, manifest);
             if (manifest.prefabs != null)
                 foreach (PrefabSpec spec in manifest.prefabs) BuildPrefabSpec(spec);
             // Generation groups may reference processed prefabs created above.
             ApplyManifest(project, manifest);
-            if (manifest.areaOperations != null) SetAreaOperations(project, manifest.areaOperations);
             if (manifest.bake) BakeAll(project); else BakeArea(project);
             SaveProject(project);
             List<string> errors = ValidateProject(project);
@@ -276,11 +277,13 @@ namespace AiTerrainWorkflow.Editor.Bridge
 
         private static void ApplyManifest(TerrainPaintProjectSO project, WorkflowManifest manifest)
         {
+            ValidateCompleteManifest(manifest);
             project.mapResolution = manifest.resolution > 0 ? manifest.resolution : project.mapResolution;
-            project.heightSeed = manifest.heightSeed; project.heightScale = manifest.heightScale > 0 ? manifest.heightScale : project.heightScale;
+            project.heightSeed = manifest.heightSeed; project.heightScale = manifest.heightScale;
+            project.smoothStep = manifest.smoothStep; project.smoothIterations = manifest.smoothIterations;
             project.naturalSeed = manifest.naturalSeed; project.roadSeed = manifest.roadSeed;
             project.scatterSeed = manifest.scatterSeed; project.propSeed = manifest.propSeed;
-            project.config.worldPerPixel = manifest.previewWorldPerPixel > 0 ? manifest.previewWorldPerPixel : project.config.worldPerPixel;
+            ApplyPaintConfig(project.config, manifest.paintConfig);
             ReplaceAssets(project.naturalTerrainLayers, manifest.naturalTerrainLayers);
             ReplaceAssets(project.roadTerrainLayers, manifest.roadTerrainLayers);
             ApplyLayers(project, manifest.layers);
@@ -291,7 +294,17 @@ namespace AiTerrainWorkflow.Editor.Bridge
             if (manifest.scatterGroups != null) ReplaceScatterGroups(project, manifest.scatterGroups);
             if (manifest.propGroups != null) ReplacePropGroups(project, manifest.propGroups);
             if (manifest.fixedGroups != null) ReplaceFixedGroups(project, manifest.fixedGroups);
+            SetAreaOperations(project, manifest.areaOperations);
             project.SyncAllLayerWeights();
+        }
+
+        private static void ApplyPaintConfig(TerrainPaintConfig target, PaintConfigSpec source)
+        {
+            target.roadStep = source.roadStep; target.walkStartTries = source.walkStartTries;
+            target.walkCandidateCount = source.walkCandidateCount; target.startCoverStopSamples = source.startCoverStopSamples;
+            target.walkSeed = source.walkSeed; target.maxStepsPerPath = source.maxStepsPerPath;
+            target.gApplySpacing = source.gApplySpacing; target.noiseScale = source.noiseScale;
+            target.worldPerPixel = source.worldPerPixel;
         }
 
         private static void ApplyLayers(TerrainPaintProjectSO project, LayerSpec[] specs)
@@ -305,6 +318,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 if (spec.index > 0 && spec.color?.Length >= 4) layer.color = new Color(spec.color[0], spec.color[1], spec.color[2], spec.color[3]);
                 if (spec.heightRange?.Length >= 2) layer.heightRange = new Vector2(spec.heightRange[0], spec.heightRange[1]);
                 layer.generateRoad = spec.generateRoad; layer.roadWidth = spec.roadWidth; layer.roadSpacingMin = spec.roadSpacingMin;
+                layer.roadFinalRemap = ToCurve(spec.roadFinalRemap);
                 if (spec.naturalWeights != null) layer.naturalLayerWeights = new List<int>(spec.naturalWeights);
                 if (spec.roadWeights != null) layer.roadLayerWeights = new List<int>(spec.roadWeights);
                 EditorUtility.SetDirty(layer);
@@ -356,6 +370,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
             {
                 FixedGroupSpec s = specs[i]; if (s == null) continue;
                 var group = ScriptableObject.CreateInstance<FixedPointConfigSO>(); group.prefab = LoadPrefab(s.prefab); group.rotationDegrees = s.rotation; group.scale = s.scale;
+                if (s.markerColor?.Length >= 4) group.markerColor = new Color(s.markerColor[0], s.markerColor[1], s.markerColor[2], s.markerColor[3]);
                 if (s.positions != null) for (int n = 0; n + 1 < s.positions.Length; n += 2) group.positions.Add(new Vector2(s.positions[n], s.positions[n + 1]));
                 AssetDatabase.CreateAsset(group, folder + $"/Fixed_{i:00}.asset"); project.fixedPointGroups.Add(group);
             }
@@ -437,8 +452,50 @@ namespace AiTerrainWorkflow.Editor.Bridge
             if (project == null) throw new ArgumentException("找不到项目配置: " + path); return project;
         }
         private static WorkflowManifest ParseManifest(string json) { if (string.IsNullOrWhiteSpace(json)) throw new ArgumentException("message JSON 不能为空"); return JsonUtility.FromJson<WorkflowManifest>(json) ?? throw new ArgumentException("manifest JSON 无效"); }
-        [Serializable] private sealed class OperationArray { public PaintOperationSpec[] operations; }
-        private static PaintOperationSpec[] ParseOperations(string json) { OperationArray wrapper = JsonUtility.FromJson<OperationArray>(json); return wrapper?.operations ?? Array.Empty<PaintOperationSpec>(); }
+        private static void ValidateCompleteManifest(WorkflowManifest manifest)
+        {
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(manifest.projectPath) && string.IsNullOrWhiteSpace(manifest.projectName)) missing.Add("projectName 或 projectPath");
+            if (Array.IndexOf(TerrainPaintProjectSO.AllowedResolutions, manifest.resolution) < 0) missing.Add("resolution(128/256/512/1024)");
+            if (manifest.paintConfig == null) missing.Add("paintConfig");
+            if (manifest.naturalTerrainLayers == null) missing.Add("naturalTerrainLayers");
+            if (manifest.roadTerrainLayers == null) missing.Add("roadTerrainLayers");
+            if (manifest.layers == null || manifest.layers.Length != TerrainPaintProjectSO.MaxLayerCount) missing.Add("layers(必须完整提供16层)");
+            if (manifest.adjacencyGroups == null) missing.Add("adjacencyGroups");
+            if (manifest.prefabs == null) missing.Add("prefabs");
+            if (manifest.areaOperations == null) missing.Add("areaOperations");
+            if (manifest.scatterGroups == null) missing.Add("scatterGroups");
+            if (manifest.propGroups == null) missing.Add("propGroups");
+            if (manifest.fixedGroups == null) missing.Add("fixedGroups");
+            if (manifest.layers != null && manifest.layers.Length == TerrainPaintProjectSO.MaxLayerCount)
+            {
+                var seen = new bool[TerrainPaintProjectSO.MaxLayerCount];
+                foreach (LayerSpec layer in manifest.layers)
+                {
+                    if (layer == null || layer.index < 0 || layer.index >= seen.Length) { missing.Add("layers 中存在空项或非法 index"); continue; }
+                    if (seen[layer.index]) missing.Add("layers index 重复: " + layer.index);
+                    seen[layer.index] = true;
+                    if (layer.color == null || layer.color.Length < 4) missing.Add($"layers[{layer.index}].color");
+                    if (layer.heightRange == null || layer.heightRange.Length < 2) missing.Add($"layers[{layer.index}].heightRange");
+                    if (layer.roadFinalRemap == null || layer.roadFinalRemap.Length == 0) missing.Add($"layers[{layer.index}].roadFinalRemap");
+                    if (layer.naturalWeights == null || manifest.naturalTerrainLayers == null || layer.naturalWeights.Length != manifest.naturalTerrainLayers.Length) missing.Add($"layers[{layer.index}].naturalWeights 长度");
+                    if (layer.roadWeights == null || manifest.roadTerrainLayers == null || layer.roadWeights.Length != manifest.roadTerrainLayers.Length) missing.Add($"layers[{layer.index}].roadWeights 长度");
+                }
+                for (int i = 0; i < seen.Length; i++) if (!seen[i]) missing.Add("缺少 layer index: " + i);
+            }
+            if (missing.Count > 0) throw new ArgumentException("manifest 必须是完整配置，缺少或无效: " + string.Join(", ", missing));
+        }
+        private static AnimationCurve ToCurve(CurveKeySpec[] specs)
+        {
+            if (specs == null || specs.Length == 0) return AnimationCurve.Linear(0f, 0f, 1f, 1f);
+            var keys = new Keyframe[specs.Length];
+            for (int i = 0; i < specs.Length; i++)
+            {
+                CurveKeySpec s = specs[i];
+                keys[i] = new Keyframe(s.time, s.value, s.inTangent, s.outTangent, s.inWeight, s.outWeight) { weightedMode = (WeightedMode)s.weightedMode };
+            }
+            return new AnimationCurve(keys);
+        }
         private static T ParseEnum<T>(string value, T fallback) where T : struct { return !string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, true, out T parsed) ? parsed : fallback; }
         private static Vector2Int Point(int[] value) { return value != null && value.Length >= 2 ? new Vector2Int(value[0], value[1]) : Vector2Int.zero; }
         private static GameObject LoadPrefab(string path) { return string.IsNullOrWhiteSpace(path) ? null : AssetDatabase.LoadAssetAtPath<GameObject>(NormalizeAssetPath(path)); }

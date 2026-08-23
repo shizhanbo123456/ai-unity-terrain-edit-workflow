@@ -5,3 +5,7 @@ TerrainGeneratorConfigs.meta
 # 备用 Prefab、Billboard 图片和派生材质均为本地生成产物。
 Generated/
 Generated.meta
+
+# Python CLI 本地字节码缓存。
+python/__pycache__/
+python/__pycache__.meta
