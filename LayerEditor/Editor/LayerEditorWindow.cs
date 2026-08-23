@@ -663,6 +663,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     Debug.LogError($"[Terrain Paint Workflow] 备用预制体创建失败: {path}\n{exception}");
                 }
             }
+            _candidatePrefabSources.Clear();
             return created;
         }
 
