@@ -21,10 +21,12 @@ namespace AiTerrainWorkflow.Editor
             GeneratedRoot + "/Materials";
         private const string BillboardTemplateMaterialPath =
             "Assets/ai-unity-terrain-edit-workflow/src/billboard.mat";
-        private const string CrossPlaneModelPath =
-            "Assets/ai-unity-terrain-edit-workflow/src/CrossShapedPatches.fbx";
-        private const string LinearPlaneModelPath =
-            "Assets/ai-unity-terrain-edit-workflow/src/LinearShapePatch.fbx";
+        private const string CrossPlanePrefabPath =
+            "Assets/ai-unity-terrain-edit-workflow/src/cross.prefab";
+        private const string LinearPlanePrefabPath =
+            "Assets/ai-unity-terrain-edit-workflow/src/linear.prefab";
+        private const float PlaneSourceWidth = 2f;
+        private const float PlaneSourceHeight = 1f;
 
         /// <summary>判断 Prefab 是否为可供工作流三个摆放模块引用的已处理备用 Prefab。</summary>
         public static bool IsProcessedCandidatePrefab(GameObject prefab, out string reason)
@@ -323,12 +325,14 @@ namespace AiTerrainWorkflow.Editor
             material.mainTexture = texture;
             EditorUtility.SetDirty(material);
 
-            string modelPath = mode == BillboardMode.CrossPlanes
-                ? CrossPlaneModelPath
-                : LinearPlaneModelPath;
-            var planeModel = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
-            if (planeModel == null)
-                throw new InvalidOperationException("找不到 Billboard 面片模型: " + modelPath);
+            string planePrefabPath = mode == BillboardMode.CrossPlanes
+                ? CrossPlanePrefabPath
+                : LinearPlanePrefabPath;
+            var planePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(planePrefabPath);
+            if (planePrefab == null)
+                throw new InvalidOperationException("找不到 Billboard 面片 Prefab: " + planePrefabPath);
+            if (planePrefab.transform.childCount == 0)
+                throw new InvalidOperationException("Billboard 面片 Prefab 根节点缺少模型子物体: " + planePrefabPath);
 
             GameObject contentsRoot = null;
             try
@@ -343,9 +347,9 @@ namespace AiTerrainWorkflow.Editor
                     UnityEngine.Object.DestroyImmediate(oldBillboard.gameObject);
 
                 Renderer[] originalRenderers = contentsRoot.GetComponentsInChildren<Renderer>(true);
-                var billboard = PrefabUtility.InstantiatePrefab(planeModel, contentsRoot.transform) as GameObject;
+                var billboard = PrefabUtility.InstantiatePrefab(planePrefab, contentsRoot.transform) as GameObject;
                 if (billboard == null)
-                    throw new InvalidOperationException("Billboard 面片实例化失败: " + modelPath);
+                    throw new InvalidOperationException("Billboard 面片实例化失败: " + planePrefabPath);
                 billboard.name = "_Billboard";
                 billboard.transform.localPosition = Vector3.zero;
                 billboard.transform.localRotation = Quaternion.identity;
@@ -353,19 +357,12 @@ namespace AiTerrainWorkflow.Editor
 
                 Renderer[] billboardRenderers = billboard.GetComponentsInChildren<Renderer>(true);
                 if (billboardRenderers.Length == 0)
-                    throw new InvalidOperationException("Billboard 面片不包含 Renderer: " + modelPath);
+                    throw new InvalidOperationException("Billboard 面片不包含 Renderer: " + planePrefabPath);
                 foreach (Renderer renderer in billboardRenderers)
                     renderer.sharedMaterial = material;
 
-                Bounds planeBounds = billboardRenderers[0].bounds;
-                for (int i = 1; i < billboardRenderers.Length; i++)
-                    planeBounds.Encapsulate(billboardRenderers[i].bounds);
-                float sourceWidth = mode == BillboardMode.CrossPlanes
-                    ? Mathf.Max(planeBounds.size.x, planeBounds.size.z)
-                    : planeBounds.size.x;
-                float sourceHeight = planeBounds.size.y;
-                float horizontalScale = capture.projectedWidth / Mathf.Max(0.0001f, sourceWidth);
-                float verticalScale = capture.projectedHeight / Mathf.Max(0.0001f, sourceHeight);
+                float horizontalScale = capture.projectedWidth / PlaneSourceWidth;
+                float verticalScale = capture.projectedHeight / PlaneSourceHeight;
                 billboard.transform.localScale = new Vector3(
                     horizontalScale, verticalScale, horizontalScale);
                 billboard.transform.localPosition = capture.boundsCenter;

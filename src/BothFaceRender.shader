@@ -9,13 +9,20 @@ Shader "Custom/BothFaceRender"
     }
     SubShader
     {
-        Tags { "RenderType"="Opaque" "ForceNoShadowCasting"="True" }
+        Tags
+        {
+            "Queue"="Transparent"
+            "RenderType"="Transparent"
+            "IgnoreProjector"="True"
+            "ForceNoShadowCasting"="True"
+        }
         LOD 200
         Cull Off
+        ZWrite Off
 
         CGPROGRAM
         // Physically based Standard lighting model, and enable shadows on all light types
-        #pragma surface surf Standard noshadow
+        #pragma surface surf Standard alpha:fade noshadow
 
         // Use shader model 3.0 target, to get nicer looking lighting
         #pragma target 3.0
