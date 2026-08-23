@@ -39,6 +39,12 @@ namespace AiTerrainWorkflow.LayerEditor
     {
         public string groupName = "摆件生成组";
 
+        [Tooltip("流式生成区块尺寸（米，x/z）；可见距离为负时忽略，一次性全量放置")]
+        public Vector2 chunkSize = new Vector2(16f, 16f);
+
+        [Tooltip("区块中心距观察点不超过该距离时保持激活；负数 = 无限（一次性显示全部，之后不再变动）")]
+        public float visibleDistance = 60f;
+
         [Min(0)] public int maxFailedAttempts = 20;
         [Min(0f)] public float expectedDensity = 0.01f;
 

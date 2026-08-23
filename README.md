@@ -357,9 +357,9 @@ function WorkflowConfig.DrawMapDataPreview():
 | 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
-| 4 散布编辑 | layerMap + 多个散布生成组 | 按组配置目标层级、离路范围、密度、缩放、Prefab 池与流式区块参数 | `ScatterConfig/*.asset`；位置不存储 | **[已完成]**（配置编辑 + 分组流式生成） |
-| 5 摆件编辑 | 物体库 prefab + `PropConfigSO` | 多候选择优、值域/层级过滤、Bounds 足迹、分布与世界间距约束 | `PropConfig/*.asset` | **[已完成]** |
-| 6 定点编辑 | layerMap + 定点生成组 | 在只读 layer 图上预览归一化固定位置；每组使用单个 Prefab | `FixedPointConfig/*.asset` | **[已完成]**（配置、位置预览与实际应用） |
+| 4 散布编辑 | layerMap + 多个散布生成组 | 按组配置目标层级、离路范围、密度、缩放、Prefab 池与流式区块参数 | `ScatterConfig/*.asset`；位置入 `PlacementCache/Scatter_xx.txt` | **[已完成]**（配置编辑 + 分组流式生成） |
+| 5 摆件编辑 | 物体库 prefab + `PropConfigSO` | 多候选择优、值域/层级过滤、Bounds 足迹、分布与世界间距约束 | `PropConfig/*.asset`；位置入 `PlacementCache/Prop_xx.txt` | **[已完成]** |
+| 6 定点编辑 | layerMap + 定点生成组 | 在只读 layer 图上预览归一化固定位置；每组使用单个 Prefab | `FixedPointConfig/*.asset`；位置入 `PlacementCache/Fixed_xx.txt` | **[已完成]**（配置、位置预览与实际应用） |
 | 7 应用 | 主配置 + Terrain + 最终阶段 | `TerrainBuilder.Build(project, terrain, applyThrough)` 按前缀顺序执行 | TerrainData + GameObject | **[已完成]** |
 
 ## 阶段详述
@@ -372,6 +372,7 @@ function WorkflowConfig.DrawMapDataPreview():
   - 备用 Prefab 根节点始终保持 position `(0,0,0)`、rotation identity、scale `(1,1,1)`，并挂载 `PrefabStructureInfo`。
   - 根节点下的内容是可编辑的：允许调整子物体位置、方向、缩放，允许增加、删除子物体并拼合多个对象。
   - 再次通过处理工具导入同名备用 Prefab时，只更新结构信息和 Billboard，不覆盖人工修改的内容。
+  - **添加备选 Prefab 后必须确认内容正确**：打开 `Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/` 下对应的备用 Prefab 检查模型。部分源 Prefab 的模型**中心正下方不在原点**（模型自身 pivot 不在底部中心，或在场景中摆放时底部与原点有偏移），此时需要修正子物体的变换，使模型按预期放置在原点（通常让模型底部中心落在根节点原点上）；确认无误后再更新 Bounds / 生成 Billboard。根节点本身不可移动（保持零变换），修正一律作用在子物体上。
 - 摆件生成组使用独立的 `PropConfigSO`，不再复用简单对象列表容器。
 
 ### 阶段 1 · 区域编辑 [已完成]
@@ -381,7 +382,7 @@ function WorkflowConfig.DrawMapDataPreview():
 - 每画完一笔先把操作追加到列表，再调用 `LayerMap.ApplyPaintOperation` 增量应用；`LayerMap.RebuildFromPaintOperations` 会清空画布并按列表顺序完整重建。撤销通过删除列表最后一条操作并完整重建实现。
 - **每画完一笔仍同步写 `MapData/layerMap.txt`**，作为后续高度、贴图和摆放阶段直接消费的栅格结果；操作列表保存在主配置资产中。
 - 打开仅有旧 `layerMap`、尚无操作列表的配置时，会按每行连续同层区段一次性迁移为矩形操作，保留原有绘制结果。
-- Layer0 恒为透明过渡层，其余 15 个预设色可改颜色/名称（颜色解析为层 ID 只此一步，后续流程不接触颜色）。
+- Layer0 恒为透明过渡层；**新建配置默认创建 3 层**（Layer0 透明 + 2 个语义层，`TerrainPaintProjectSO.DefaultLayerCount = 3`），可在工作流配置页增删层至上限 16。其余预设色（共 15 个）可改颜色/名称（颜色解析为层 ID 只此一步，后续流程不接触颜色）。
 - **透明区域（未绘制位置 = Layer0 / 层ID = -1）[后续在全局配置补充设置，当前不处理]**：不属于任何语义层的空白位置。其下游行为（高度默认值 / 贴图权重 / 是否生成物体）**后续统一在全局配置中增加透明区域设置项**再落实；当前各阶段对 -1 暂按既有默认处理（高度平地、贴图全 0、不生成位置），不做专门设计、不单独落地规则。
 
 ### 阶段 2 · 高度编辑 [已完成]
@@ -395,7 +396,8 @@ function WorkflowConfig.DrawMapDataPreview():
 
 - 链路：`ParseLayerIds`（色→层ID）→ `GroupLayers`（邻接组，冲突阻断）→ `ComputeR`（带 X/Z 世界间距的 Felzenszwalb 欧氏距离场）→ `GenerateRoads`（世界距离参数换算到栅格，G=占用/间隔缓冲，B=路面硬掩码）→ `ComputeOffRoad`（语义层拼合区域内到最近道路的世界距离）。
 - 结果写入四个 MapData key：`distance`（R，世界距离）/ `occupancy`（G）/ `road`（B）/ `offRoad`（世界距离：语义层区域（不含 Layer0）内到最近道路的距离，道路处=0、区域外=0）。Build 时按目标 Terrain 的实际像素中心间距在内存中重算，避免预览比例污染最终结果。
-- **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。
+- **offRoad 的无道路语义**：当配置中没有生成任何道路（road 全 0）时，`ComputeOffRoad` 把无穷远距离（≥1e9）视为 0——即"无道路 = 无离路约束"，散布/摆件的 `offRoadDistanceRange` 过滤不会因此误杀全部候选点（此前无路时 offRoad=1e10，任何有限范围都会过滤掉全部像素）。
+- **alphamap 最终权重不落盘**：由 TerrainBuilder 在构建时用噪声生成（见阶段 7）。各层只保留权重规则（`naturalLayerWeights` / `roadLayerWeights`，索引 = 对应池 id）。原始自然/道路混合并归一化后，若 `textureSmoothingRadius > 0`，会对每个 alphamap 像素及其上下左右相距该半径的四个像素做五点平均，并再次归一化；边缘采样钳制到最近有效像素。
 
 ### 阶段 5 · 摆件编辑 [已完成]
 
@@ -411,6 +413,8 @@ function WorkflowConfig.DrawMapDataPreview():
 
 | 参数 | 语义 | 层级 |
 |---|---|---|
+| 区块尺寸（Vector2） | 流式区块大小（米，x/z）；与散布/定点一致，为三类摆放生成组共有参数 | 组 |
+| 可见距离（float，可 <0） | 区块激活半径（米）；**负数 = 无限模式（一次性全量显示，之后不再变动）** | 组 |
 | 失败尝试次数上限 | 单次尝试（生成一批）**失败**（整批被销毁）的次数上限；生成循环在"已放置数达到目标"或"失败次数达上限"时停止 | 组 |
 | 预期密度 | 该生成组期望的**单位面积物体数**（密度，如 个/100m² 或 个/m²）；实际目标数量 = round(预期密度 × 该组作用域面积) | 组 |
 | 生成规模（Vector2Int） | 控制"单次尝试"的**批量生成**：单次尝试会尝试生成 **`Vector2Int.y` 个物体**；若这批物体中**合法数量 ≥ `Vector2Int.x`**，则保留该批（放置）；否则**完全销毁该次生成的内容**，本次尝试计入一次失败（见失败尝试次数上限） | 组 |
@@ -439,6 +443,7 @@ function WorkflowConfig.DrawMapDataPreview():
 
 - 主配置只保留一个全局 `scatterSeed`，不再区分树木与细节。
 - 每个 `ScatterConfigSO` 表示一个散布生成组，配置：区块尺寸、可见距离、Prefab 池、密度、随机缩放范围、离路距离范围（Vector2 min/max）和目标层级（`TerrainWorkflowLayerMask` Flags）。
+- **区块尺寸与可见距离是所有摆放类生成组（散布/摆件/定点）共有的参数**：`chunkSize`（Vector2，米）与 `visibleDistance`（float，米）。**可见距离为负数 = 无限模式**：第一次驱动时一次性激活全部已注册区块（相当于全图实例化），之后更新不再有任何变动（active/inactive 恒空），适合全量静态场景；非负数时保持按观察点距离的流式激活/回收。
 - 配置资产统一存放在 `TerrainGeneratorConfigs/<项目>/ScatterConfig/`；编辑器中的“添加散布生成组”会创建独立 `.asset`，删除组时同步删除对应资产。
 - 散布位置不落 MapData。`TerrainBuilder.Build` 会遍历地形覆盖的全部区块，预计算每个区块的位置、Prefab、缩放和偏航列表；`SetCameraPosition(Vector2)` 只负责按可见距离从对象池实例化或回收。目标层级与 `offRoad` 范围过滤通过后，按密度选择像素中心、按 Prefab 权重随机选择，并使用全局 seed ⊕ 组 index ⊕ 区块 index 保证结果可复现。
 - 启用 `twoPointHeightAdaptation` 的 Prefab 会按缩放和 Y 旋转计算 Bounds X 两端的世界位置，分别采样 Terrain 高度并取平均值作为根节点 Y；散布和定点使用同一规则。
@@ -447,7 +452,7 @@ function WorkflowConfig.DrawMapDataPreview():
 ### 阶段 6 · 定点编辑 [已完成]
 
 - 界面左侧只读显示当前 layer 图，右侧编辑多个定点生成组。
-- 每组配置标识颜色、单个 Prefab、归一化位置列表（X/Y 均为 0~1）、Y 轴旋转角度（0~360°）和统一缩放。
+- 每组配置标识颜色、单个 Prefab、归一化位置列表（X/Y 均为 0~1）、Y 轴旋转角度（0~360°）和统一缩放，以及三类摆放生成组共有的 `chunkSize` / `visibleDistance`（负数 = 无限模式全量显示）。
 - layer 图按标识颜色绘制每个位置；标记为带黑色外框的圆点，Y 坐标向上对应 Terrain 的 Z 方向。
 - 每组资产保存在 `TerrainGeneratorConfigs/<项目>/FixedPointConfig/`。`TerrainBuilder.ApplyFixedPoints` 会按归一化位置映射 Terrain X/Z，并应用配置的 Y 旋转、缩放和高度适应后实例化。
 
@@ -478,7 +483,19 @@ function WorkflowConfig.DrawMapDataPreview():
 - 引用：主配置持 `mapDataFiles`（`key + TextAsset`），随 SO 打进构建；**编辑器读直接读磁盘文件（保最新）**，**运行时走 TextAsset**。
 - 辅助：`MapDataTextureUtils`（float[][]↔Texture2D，仅编辑期显示/采集）。
 - 预览：「工作流配置 → MapData 预览」枚举当前配置已持久化的全部 MapData，每项独立归一化为灰度图并显示 key、分辨率与 min/max。
-- key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。散布位置**不存储**（构建时按生成组与区块动态生成，见阶段 5）。
+- key 约定（共 6 个）：`layerMap / height / distance / occupancy / road / offRoad` **[已完成]**。散布位置不入 MapData（构建时按生成组与区块动态生成，见阶段 5）；放置位置缓存独立存于 `PlacementCache/`（见下节）。
+
+## 放置缓存存储层（PlacementCache）[已完成]
+
+- **位置缓存按「类 × 生成组」独立成文件**，目录 `TerrainGeneratorConfigs/<项目>/PlacementCache/`（与 `MapData/` 同级，不混放）；每类每生成组一个 txt：`Scatter_xx.txt` / `Prop_xx.txt` / `Fixed_xx.txt`（xx = 组索引）。
+- 文件头统一包含：指纹（`#fingerprint=`，覆盖该组全部生成输入，任一参数/内容变化 → 指纹不同 → 缓存失效）、**区块尺寸（`#chunkSize=`）与可见距离（`#visibleDistance=`）**，便于按文件管理各组的流式参数；随后是数据行：
+  - `Scatter`：`instanceId, pixelX, pixelZ, scale, yaw`（像素坐标，运行时按 Terrain 尺寸换算世界）
+  - `Prop`：`instanceId, worldX, worldZ, yaw`
+  - `Fixed`：`instanceId, worldX, worldZ, yaw, scale`
+- 生命周期：**编辑器（非运行时）Build** 逐组计算并写各自文件，`RefreshPlacementCacheRefs` 更新主配置 `placementCacheFiles`（`key=文件名 + TextAsset`）引用并 `SaveAssets`；**运行时 Build** 逐组读取对应文件、校验该组指纹，一致则直接复用位置（散布流式区块照常驱动，摆件/定点直接实例化），不一致或无缓存则**只重算不写盘**。
+- 指纹输入：Terrain 尺寸/位置、全局种子、每层道路参数、邻接组、layerMap 内容、该组全部参数与每个 prefab 的 instanceId+权重。layerMap/road/offRoad 等派生数据不入指纹（由输入推导）。
+- 删除生成组时窗口同步删除对应缓存文件与主配置引用；定点位置本为手动配置，同样入缓存以统一"编辑器计算 → 运行时复用"链路。
+- 引用解析用 **instanceId**：同一 Unity 会话内稳定（编辑器 Build → 编辑器 Play 命中）；跨会话/Player 失效时自动回退重算（不写盘）。
 
 ## 目录结构
 
@@ -521,7 +538,8 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
     ├── ScatterConfig/           散布生成组
     ├── PropConfig/              摆件生成组
     ├── FixedPointConfig/        定点生成组
-    └── MapData/                编辑器持久化的栅格数据
+    ├── MapData/                编辑器持久化的栅格数据
+    └── PlacementCache/          放置位置缓存（每类×每生成组一个 txt，与 MapData 同级）
 ```
 
 ## 菜单与窗口 [已完成]
@@ -535,11 +553,12 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - 散布、摆件、定点三个摆放模块只能引用经 `PrefabProcessingUtility.BuildCandidatePrefab` 处理的备用 Prefab，不能直接引用原始素材 Prefab。
 - 备用 Prefab 必须位于 `Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/`，根节点必须挂有 `PrefabStructureInfo`，且根 Transform 必须为 position `(0,0,0)`、rotation identity、scale `(1,1,1)`。
 - 首次生成使用空的标准根节点包装源 Prefab；生成后可自由调整所有子物体的变换，并可增加、删除或拼合多个对象。再次处理同名备用 Prefab 不会重建或覆盖这些人工修改，只更新结构信息与 Billboard。
+- **添加备选 Prefab 后必须到 `Generated/Prefabs/` 确认内容正确**：部分源 Prefab 的模型**中心正下方不在原点**（模型 pivot 不在底部中心，或底部与原点存在偏移），需要调整备用 Prefab 的子物体变换，使模型按预期落位（通常令模型底部中心对准根节点原点）；确认无误后再更新 Bounds 或生成 Billboard。修正只作用于子物体，根节点保持零变换。
 - 工具产生的主配置、生成组和 MapData 保存在工具内的 `TerrainGeneratorConfigs/`；所有备用 Prefab、Billboard 图片和派生材质集中保存在 `Generated/`，不会直接散落在工具根目录。删除工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
 - `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。
 - 批量添加在 BillboardMode 非 None 时会立即完成截图、材质、面片和 LOD 装配；批量更新 Billboard 可在之后统一重建。截图固定来自 `(0,0,1)`，并使用强度 2 的相机同向平行光；每个备用 Prefab 使用 `src/billboard.mat` 为模板创建独立的透明、双面、无阴影材质，并自动装入 `src/cross.prefab` 或 `src/linear.prefab`。两个面片 Prefab 均使用标准根 Transform，模型为第一个子物体；缩放基准为宽 2m、高 1m。面片 X/Z 中心对齐 Bounds 中心，底部枢轴对齐 Bounds 的 Y 最低点。
 - 生成目录固定为：`Generated/Prefabs/`（备用 Prefab）、`Generated/Billboards/`（PNG）、`Generated/Materials/`（派生材质）。`Generated/` 已从工具源码版本控制中排除。
-- Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1；LOD0 在屏幕相对高度降至 10% 时切换到 LOD1，LOD1 在 1% 时剔除。
+- Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1；**LOD0→LOD1 的切换阈值 = 处理预制体界面的「LOD Billboard 切换阈值」滑块（0~1，默认 0.1）**，LOD1 在 1% 时剔除。该阈值只是处理时的输入参数，不写入任何工作流配置，最终落在每个 Prefab 的 LODGroup 组件上。
 - **已知问题（待后续解决）**：透明交叉面片存在渲染遮挡/排序异常，特定视角下可能表现为其中一个面片始终位于另一个面片前方。当前 Shader 的透明深度方案不能覆盖所有交叉透明面的排序情形，后续需要专门调整渲染方案。
 - 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、不是 `Generated/Prefabs/` 中的备用 Prefab、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
 - 工作流配置页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds；应用页仅保留目标 Terrain、应用阶段和执行入口。

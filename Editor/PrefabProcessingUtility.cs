@@ -73,11 +73,13 @@ namespace AiTerrainWorkflow.Editor
         /// <param name="targetPrefab">Project 中作为内容来源的 .prefab 资产。</param>
         /// <param name="billboardMode">Billboard/LOD 使用方式。</param>
         /// <param name="twoPointHeightAdaptation">是否启用两点高度适应。</param>
+        /// <param name="lodTransition">LOD0→Billboard(LOD1) 的屏幕相对高度切换阈值（0~1，默认 0.1=10%）。</param>
         /// <returns>创建完成的包装 Prefab 资产。</returns>
         public static GameObject BuildCandidatePrefab(
             GameObject targetPrefab,
             BillboardMode billboardMode,
-            bool twoPointHeightAdaptation)
+            bool twoPointHeightAdaptation,
+            float lodTransition = 0.1f)
         {
             if (targetPrefab == null)
                 throw new ArgumentNullException(nameof(targetPrefab));
@@ -102,7 +104,7 @@ namespace AiTerrainWorkflow.Editor
                     billboardMode,
                     twoPointHeightAdaptation);
                 if (billboardMode != BillboardMode.None)
-                    UpdateBillboard(outputPath, billboardMode);
+                    UpdateBillboard(outputPath, billboardMode, lodTransition);
                 return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
             }
 
@@ -139,7 +141,7 @@ namespace AiTerrainWorkflow.Editor
                 twoPointHeightAdaptation);
 
             if (billboardMode != BillboardMode.None)
-                UpdateBillboard(outputPath, billboardMode);
+                UpdateBillboard(outputPath, billboardMode, lodTransition);
 
             return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
         }
@@ -149,8 +151,9 @@ namespace AiTerrainWorkflow.Editor
         /// 为 billboardMode!=None 的对象从 (0,0,1) 方向生成正交 Billboard，
         /// 随后创建对应面片、独立材质并配置 LODGroup。
         /// </summary>
+        /// <param name="lodTransition">LOD0→Billboard(LOD1) 的屏幕相对高度切换阈值（0~1，默认 0.1）。</param>
         /// <returns>成功更新的 Billboard 数量。</returns>
-        public static int UpdateAllBillboards()
+        public static int UpdateAllBillboards(float lodTransition = 0.1f)
         {
             int updated = 0;
             foreach (string prefabPath in FindCandidatePrefabPaths())
@@ -162,7 +165,7 @@ namespace AiTerrainWorkflow.Editor
 
                 try
                 {
-                    UpdateBillboard(prefabPath, info.billboardMode);
+                    UpdateBillboard(prefabPath, info.billboardMode, lodTransition);
                     updated++;
                 }
                 catch (Exception exception)
@@ -232,7 +235,7 @@ namespace AiTerrainWorkflow.Editor
             return paths.ToArray();
         }
 
-        private static void UpdateBillboard(string prefabPath, BillboardMode mode)
+        private static void UpdateBillboard(string prefabPath, BillboardMode mode, float lodTransition)
         {
             EnsureAssetFolder(BillboardOutputDirectory);
             var result = PrefabBillboardCommand.Billboard(
@@ -252,7 +255,7 @@ namespace AiTerrainWorkflow.Editor
                                  Path.GetFileNameWithoutExtension(prefabPath) + ".png";
             AssetDatabase.Refresh();
             AssetDatabase.ImportAsset(texturePath, ImportAssetOptions.ForceSynchronousImport);
-            AttachBillboard(prefabPath, mode, texturePath, result);
+            AttachBillboard(prefabPath, mode, texturePath, result, lodTransition);
         }
 
         private static bool BoundsAreAllZero(PrefabStructureInfo info)
@@ -288,7 +291,8 @@ namespace AiTerrainWorkflow.Editor
             string prefabPath,
             BillboardMode mode,
             string texturePath,
-            PrefabBillboardResult capture)
+            PrefabBillboardResult capture,
+            float lodTransition)
         {
             var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
             if (texture == null)
@@ -367,9 +371,10 @@ namespace AiTerrainWorkflow.Editor
                 var lodGroup = contentsRoot.GetComponent<LODGroup>();
                 if (lodGroup == null)
                     lodGroup = contentsRoot.AddComponent<LODGroup>();
+                float transition = Mathf.Clamp01(lodTransition);
                 lodGroup.SetLODs(new[]
                 {
-                    new LOD(0.1f, originalRenderers),
+                    new LOD(transition, originalRenderers),
                     new LOD(0.01f, billboardRenderers),
                 });
                 lodGroup.RecalculateBounds();

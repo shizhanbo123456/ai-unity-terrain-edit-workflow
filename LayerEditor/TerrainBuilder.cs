@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using UnityEngine;
 using UnityEngine.Pool;
 
@@ -19,6 +21,7 @@ namespace AiTerrainWorkflow.LayerEditor
     ///   - 取出 / 新建时 SetActive(true)，放回池时 SetActive(false)。
     /// 高度以 Terrain 组件（SampleHeight）为准，不依赖高度 MapData 是否已生成 / 已应用。
     /// </summary>
+    [ExecuteAlways]
     public class TerrainBuilder : MonoBehaviour
     {
         private TerrainPaintProjectSO _config;
@@ -26,6 +29,15 @@ namespace AiTerrainWorkflow.LayerEditor
 
         /// <summary>当前这次 Build 的 MapData 内存集合；运行时新计算结果只存放在此处。</summary>
         public TerrainMapData MapData { get; private set; }
+
+        [Header("编辑器驱动")]
+        [Tooltip("仅编辑器模式（非播放）有效：勾选后允许在编辑器中用 MainCamera 位置驱动散布区块的流式生成/回收。运行时始终按 MainCamera 驱动，不受本项影响。")]
+        public bool updateInEditMode = true;
+
+        // 放置缓存（编辑器计算 → 运行时复用）：按「类 × 生成组」拆分，每组一个文件
+        private readonly List<PlacementCache.CacheData> _scatterCacheGroups = new List<PlacementCache.CacheData>();
+        private readonly List<PlacementCache.CacheData> _propCacheGroups = new List<PlacementCache.CacheData>();
+        private readonly List<PlacementCache.CacheData> _fixedCacheGroups = new List<PlacementCache.CacheData>();
 
         private sealed class ScatterRuntime
         {
@@ -38,6 +50,7 @@ namespace AiTerrainWorkflow.LayerEditor
             }
 
             public ScatterConfigSO config;
+            public int groupIndex;
             public ChunkUpdateManager chunks;
             public int seed;
             public readonly Dictionary<int, ObjectPool<GameObject>> pools = new Dictionary<int, ObjectPool<GameObject>>();
@@ -77,6 +90,11 @@ namespace AiTerrainWorkflow.LayerEditor
         /// <summary>
         /// 构建：创建本次 MapData 内存会话，并从高度到 applyThrough 按顺序应用各阶段。
         /// 重复 Build 执行到散布/定点阶段时会重建对应根节点，避免重复保留上一次生成物。
+        ///
+        /// 放置缓存（散布+摆件）：
+        ///   - 编辑器（非运行时）调用：重算散布/摆件位置，构建结束后写入主配置引用的 PlacementCache txt；
+        ///   - 运行时调用：若主配置已引用缓存 txt 且配置指纹一致，直接读取位置复用（不再重算）；
+        ///     指纹不一致或没有缓存则重新计算，且只保留在内存（不写盘、不修改配置资产）。
         /// </summary>
         public void Build(TerrainPaintProjectSO projectConfig, Terrain terrain, TerrainWorkflowStage applyThrough)
         {
@@ -90,15 +108,53 @@ namespace AiTerrainWorkflow.LayerEditor
             _terrain = terrain;
             MapData = TerrainMapData.Load(projectConfig);
 
+            // 放置缓存：编辑器模式收集（每组一个 CacheData），运行时逐组读取校验指纹
+            _scatterCacheGroups.Clear();
+            _propCacheGroups.Clear();
+            _fixedCacheGroups.Clear();
+
             ApplyHeight();
             if ((int)applyThrough < (int)TerrainWorkflowStage.TextureEdit) return;
             ApplyTexture();
             if ((int)applyThrough < (int)TerrainWorkflowStage.ScatterEdit) return;
             ApplyScatter();
-            if ((int)applyThrough < (int)TerrainWorkflowStage.PropEdit) return;
+            if ((int)applyThrough < (int)TerrainWorkflowStage.PropEdit)
+            {
+                // 散布已执行：保存含散布位置的缓存（摆件/定点段为空，运行时对应组会重新计算）
+                if (!Application.isPlaying) SavePlacementCaches(projectConfig);
+                return;
+            }
             ApplyProps();
-            if ((int)applyThrough < (int)TerrainWorkflowStage.FixedPointEdit) return;
+            if ((int)applyThrough < (int)TerrainWorkflowStage.FixedPointEdit)
+            {
+                // 散布+摆件已执行：保存对应缓存（定点段为空）
+                if (!Application.isPlaying) SavePlacementCaches(projectConfig);
+                return;
+            }
             ApplyFixedPoints();
+
+            // 编辑器（非运行时）：把本次重算/收集的散布+摆件+定点位置写入各生成组缓存 txt 并更新主配置引用
+            if (!Application.isPlaying)
+                SavePlacementCaches(projectConfig);
+        }
+
+        /// <summary>
+        /// 编辑器模式（非播放）驱动入口：勾选 <see cref="updateInEditMode"/> 时，
+        /// 用场景 MainCamera 的世界 X/Z 位置驱动所有散布生成组的区块流式生成/回收。
+        /// 运行时（Play）始终驱动，不受勾选框影响。Build 之前 _scatterRuntimes 为空，直接返回。
+        /// </summary>
+        private void Update()
+        {
+#if UNITY_EDITOR
+            if (!Application.isPlaying && !updateInEditMode) return;
+#endif
+            if (_config == null || _terrain == null) return;
+            if (_scatterRuntimes.Count == 0) return;
+            Debug.Log("111");
+            Camera camera = Camera.main;
+            if (camera == null) return;
+            Vector3 position = camera.transform.position;
+            SetCameraPosition(new Vector2(position.x, position.z));
         }
 
         /// <summary>把真实高度 MapData 双线性采样到 Terrain heightmap，并按 Terrain 高度归一化。</summary>
@@ -212,7 +268,49 @@ namespace AiTerrainWorkflow.LayerEditor
                             alphamaps[z, x, i] /= total;
                 }
             }
+            ApplyTextureSmoothing(alphamaps, Mathf.Max(0, _config.config.textureSmoothingRadius));
             terrainData.SetAlphamaps(0, 0, alphamaps);
+        }
+
+        /// <summary>
+        /// 对已混合并归一化的 alphamap 做五点均值平滑：中心、±X、±Z。
+        /// 半径以 alphamap 像素计，边缘采样钳制到最近有效像素；每个像素的权重向量随后重新归一化。
+        /// </summary>
+        private static void ApplyTextureSmoothing(float[,,] alphamaps, int radius)
+        {
+            if (radius <= 0) return;
+
+            int height = alphamaps.GetLength(0);
+            int width = alphamaps.GetLength(1);
+            int layerCount = alphamaps.GetLength(2);
+            if (height == 0 || width == 0 || layerCount == 0) return;
+
+            var source = (float[,,])alphamaps.Clone();
+            for (int z = 0; z < height; z++)
+            {
+                int zMinus = Mathf.Clamp(z - radius, 0, height - 1);
+                int zPlus = Mathf.Clamp(z + radius, 0, height - 1);
+                for (int x = 0; x < width; x++)
+                {
+                    int xMinus = Mathf.Clamp(x - radius, 0, width - 1);
+                    int xPlus = Mathf.Clamp(x + radius, 0, width - 1);
+                    float total = 0f;
+                    for (int layer = 0; layer < layerCount; layer++)
+                    {
+                        float value = (source[z, x, layer] + source[z, xMinus, layer] +
+                                       source[z, xPlus, layer] + source[zMinus, x, layer] +
+                                       source[zPlus, x, layer]) / 5f;
+                        alphamaps[z, x, layer] = value;
+                        total += value;
+                    }
+
+                    if (total <= 0.000001f)
+                        alphamaps[z, x, 0] = 1f;
+                    else
+                        for (int layer = 0; layer < layerCount; layer++)
+                            alphamaps[z, x, layer] /= total;
+                }
+            }
         }
 
         /// <summary>初始化各散布生成组的流式区块与对象池。</summary>
@@ -236,6 +334,7 @@ namespace AiTerrainWorkflow.LayerEditor
             ClearGeneratedRoot(ref _poolRoot);
             var poolObject = new GameObject("_TerrainBuilderPools");
             poolObject.hideFlags = HideFlags.HideInHierarchy;
+            if (!Application.isPlaying) poolObject.hideFlags |= HideFlags.DontSave;
             poolObject.transform.SetParent(transform, false);
             _poolRoot = poolObject.transform;
 
@@ -248,6 +347,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 var runtime = new ScatterRuntime
                 {
                     config = group,
+                    groupIndex = groupIndex,
                     chunks = new ChunkUpdateManager(group.chunkSize, group.visibleDistance),
                     seed = projectConfig.scatterSeed ^ (groupIndex * 83492791),
                 };
@@ -259,8 +359,330 @@ namespace AiTerrainWorkflow.LayerEditor
                     runtime.prefabKeys.Add(prefabIndex);
                     runtime.prefabWeights.Add(entry.weight);
                 }
-                PrecomputeScatterPlacements(runtime);
+
+                // 运行时：逐组读取缓存文件（Scatter_{index}.txt）并校验指纹 → 直接重建放置列表
+                bool usedCache = false;
+                if (Application.isPlaying)
+                {
+                    PlacementCache.CacheData groupCache = TryLoadScatterGroupCache(groupIndex);
+                    if (groupCache != null && groupCache.scatter.Count > 0)
+                    {
+                        usedCache = RebuildScatterFromCache(runtime, groupCache.scatter);
+                        if (!usedCache)
+                            Debug.LogWarning($"[TerrainBuilder] 散布组 {group.groupName} 缓存无法解析（prefab instanceId 变化），已回退重新计算。");
+                        else
+                            Debug.Log($"[TerrainBuilder] 散布组 {group.groupName} 指纹一致，已从 PlacementCache 复用位置。");
+                    }
+                    else if (groupCache == null && HasPlacementCacheKey(PlacementCache.ScatterFileName(groupIndex)))
+                    {
+                        Debug.LogWarning($"[TerrainBuilder] 散布组 {group.groupName} 缓存指纹不一致或格式无效，已重新计算（不写盘）。");
+                    }
+                }
+
+                if (!usedCache)
+                {
+                    PrecomputeScatterPlacements(runtime);
+                    // 编辑器模式：把本次重算的位置收集进该组缓存（Build 末尾落盘）
+                    if (!Application.isPlaying)
+                    {
+                        var cache = new PlacementCache.CacheData
+                        {
+                            chunkSize = group.chunkSize,
+                            visibleDistance = group.visibleDistance,
+                            fingerprint = ComputeScatterFingerprint(groupIndex),
+                        };
+                        CollectScatterCache(cache, runtime, groupIndex);
+                        while (_scatterCacheGroups.Count <= groupIndex)
+                            _scatterCacheGroups.Add(null);
+                        _scatterCacheGroups[groupIndex] = cache;
+                    }
+                }
+
                 _scatterRuntimes.Add(runtime);
+            }
+        }
+
+        /// <summary>把某散布组预计算好的放置列表转存为缓存条目（prefab instanceId + 像素 + 缩放 + 偏航）。</summary>
+        private static void CollectScatterCache(
+            PlacementCache.CacheData cache, ScatterRuntime runtime, int groupIndex)
+        {
+            cache.scatter.Clear();
+            foreach (var pair in runtime.placementsByChunk)
+            {
+                foreach (ScatterRuntime.Placement placement in pair.Value)
+                {
+                    GameObject prefab = placement.prefabKey >= 0 &&
+                                        placement.prefabKey < runtime.config.prefabs.Count
+                        ? runtime.config.prefabs[placement.prefabKey].prefab
+                        : null;
+                    if (prefab == null) continue;
+                    cache.scatter.Add(new PlacementCache.ScatterPlacement
+                    {
+                        prefabInstanceId = prefab.GetInstanceID(),
+                        pixelX = placement.pixel.x,
+                        pixelZ = placement.pixel.y,
+                        scale = placement.scale,
+                        yaw = placement.yaw,
+                    });
+                }
+            }
+        }
+
+        /// <summary>
+        /// 用缓存条目重建某散布组的 placementsByChunk（像素 → 区块索引映射与预计算一致）。
+        /// 任一 prefab instanceId 在当前组内无法解析时返回 false（调用方回退重新计算）。
+        /// </summary>
+        private bool RebuildScatterFromCache(ScatterRuntime runtime, List<PlacementCache.ScatterPlacement> cached)
+        {
+            var keyByInstanceId = new Dictionary<int, int>();
+            for (int i = 0; i < runtime.config.prefabs.Count; i++)
+            {
+                var entry = runtime.config.prefabs[i];
+                if (entry == null || entry.prefab == null || entry.weight <= 0) continue;
+                int instanceId = entry.prefab.GetInstanceID();
+                if (!keyByInstanceId.ContainsKey(instanceId)) keyByInstanceId[instanceId] = i;
+            }
+
+            float chunkWidth = Mathf.Max(0.0001f, runtime.config.chunkSize.x);
+            float chunkDepth = Mathf.Max(0.0001f, runtime.config.chunkSize.y);
+            int countX = Mathf.CeilToInt(_terrain.terrainData.size.x / chunkWidth);
+            int countZ = Mathf.CeilToInt(_terrain.terrainData.size.z / chunkDepth);
+
+            runtime.placementsByChunk.Clear();
+            for (int i = 0; i < cached.Count; i++)
+            {
+                PlacementCache.ScatterPlacement entry = cached[i];
+                if (!keyByInstanceId.TryGetValue(entry.prefabInstanceId, out int key)) return false;
+                int idxX = Mathf.Clamp(
+                    Mathf.FloorToInt(entry.pixelX * _wppX / chunkWidth), 0, countX - 1);
+                int idxZ = Mathf.Clamp(
+                    Mathf.FloorToInt(entry.pixelZ * _wppZ / chunkDepth), 0, countZ - 1);
+                var chunkIndex = new Vector2Int(idxX, idxZ);
+                runtime.chunks.RegisterChunk(chunkIndex);
+                if (!runtime.placementsByChunk.TryGetValue(chunkIndex, out var list))
+                {
+                    list = new List<ScatterRuntime.Placement>();
+                    runtime.placementsByChunk[chunkIndex] = list;
+                }
+                list.Add(new ScatterRuntime.Placement
+                {
+                    prefabKey = key,
+                    pixel = new Vector2Int(entry.pixelX, entry.pixelZ),
+                    scale = entry.scale,
+                    yaw = entry.yaw,
+                });
+            }
+            return true;
+        }
+
+        // ---------- 放置缓存读写（按生成组，每组一个文件） ----------
+
+        /// <summary>主配置是否已引用该缓存文件名（运行时判断是否有缓存可读）。</summary>
+        private bool HasPlacementCacheKey(string fileName)
+        {
+            return LoadPlacementCacheAsset(fileName) != null;
+        }
+
+        /// <summary>读取主配置引用的指定缓存文件 TextAsset（无则 null）。</summary>
+        private TextAsset LoadPlacementCacheAsset(string fileName)
+        {
+            if (_config == null || _config.placementCacheFiles == null) return null;
+            foreach (var e in _config.placementCacheFiles)
+                if (e != null && e.key == fileName) return e.file;
+            return null;
+        }
+
+        /// <summary>运行时：读取并校验散布组缓存（Scatter_{index}.txt）；未命中返回 null。</summary>
+        private PlacementCache.CacheData TryLoadScatterGroupCache(int groupIndex)
+        {
+            TextAsset asset = LoadPlacementCacheAsset(PlacementCache.ScatterFileName(groupIndex));
+            if (asset == null) return null;
+            PlacementCache.CacheData data = PlacementCache.DecodeScatter(asset.text);
+            if (data == null) return null;
+            if (data.fingerprint != ComputeScatterFingerprint(groupIndex)) return null;
+            return data;
+        }
+
+        /// <summary>运行时：读取并校验摆件组缓存（Prop_{index}.txt）；未命中返回 null。</summary>
+        private PlacementCache.CacheData TryLoadPropGroupCache(int groupIndex)
+        {
+            TextAsset asset = LoadPlacementCacheAsset(PlacementCache.PropFileName(groupIndex));
+            if (asset == null) return null;
+            PlacementCache.CacheData data = PlacementCache.DecodeProps(asset.text);
+            if (data == null) return null;
+            if (data.fingerprint != ComputePropFingerprint(groupIndex)) return null;
+            return data;
+        }
+
+        /// <summary>运行时：读取并校验定点组缓存（Fixed_{index}.txt）；未命中返回 null。</summary>
+        private PlacementCache.CacheData TryLoadFixedGroupCache(int groupIndex)
+        {
+            TextAsset asset = LoadPlacementCacheAsset(PlacementCache.FixedFileName(groupIndex));
+            if (asset == null) return null;
+            PlacementCache.CacheData data = PlacementCache.DecodeFixed(asset.text);
+            if (data == null) return null;
+            if (data.fingerprint != ComputeFixedFingerprint(groupIndex)) return null;
+            return data;
+        }
+
+        /// <summary>编辑器（非运行时）Build 结束时：按生成组逐个写入缓存 txt 并更新主配置引用。</summary>
+        private void SavePlacementCaches(TerrainPaintProjectSO project)
+        {
+            for (int i = 0; i < _scatterCacheGroups.Count; i++)
+            {
+                var cache = _scatterCacheGroups[i];
+                if (cache == null) continue;
+                cache.fingerprint = ComputeScatterFingerprint(i);
+                project.WritePlacementCacheFile(
+                    PlacementCache.ScatterFileName(i), PlacementCache.EncodeScatter(cache));
+            }
+            for (int i = 0; i < _propCacheGroups.Count; i++)
+            {
+                var cache = _propCacheGroups[i];
+                if (cache == null) continue;
+                cache.fingerprint = ComputePropFingerprint(i);
+                project.WritePlacementCacheFile(
+                    PlacementCache.PropFileName(i), PlacementCache.EncodeProps(cache));
+            }
+            for (int i = 0; i < _fixedCacheGroups.Count; i++)
+            {
+                var cache = _fixedCacheGroups[i];
+                if (cache == null) continue;
+                cache.fingerprint = ComputeFixedFingerprint(i);
+                project.WritePlacementCacheFile(
+                    PlacementCache.FixedFileName(i), PlacementCache.EncodeFixed(cache));
+            }
+            project.RefreshPlacementCacheRefs(true);
+        }
+
+        /// <summary>指纹公共前缀：Terrain 尺寸/位置、高度/散布/摆件种子、每层道路参数、邻接组、layerMap 内容。</summary>
+        private void AppendFingerprintBase(StringBuilder sb)
+        {
+            sb.Append("t=").Append(_terrain.terrainData.size.x.ToString("R", CultureInfo.InvariantCulture))
+              .Append(',').Append(_terrain.terrainData.size.z.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";tp=").Append(_terrain.transform.position.x.ToString("R", CultureInfo.InvariantCulture))
+              .Append(',').Append(_terrain.transform.position.z.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";hs=").Append(_config.heightSeed)
+              .Append(";hsc=").Append(_config.heightScale.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";ss=").Append(_config.scatterSeed)
+              .Append(";ps=").Append(_config.propSeed)
+              .Append(';');
+
+            for (int i = 0; i < _config.layers.Count; i++)
+            {
+                LayerConfigSO layer = _config.layers[i];
+                if (layer == null) continue;
+                sb.Append("l").Append(i).Append(':')
+                  .Append(layer.generateRoad ? 1 : 0).Append(',')
+                  .Append(layer.roadWidth.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(layer.roadSpacingMin.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+            }
+            for (int g = 0; g < _config.adjacencyGroups.Count; g++)
+            {
+                List<int> group = _config.adjacencyGroups[g];
+                if (group == null) continue;
+                sb.Append("a").Append(g).Append(':');
+                foreach (int idx in group) sb.Append(idx).Append(',');
+                sb.Append(';');
+            }
+            sb.Append("lm=").Append(HashMapData(_layerMapData)).Append(';');
+        }
+
+        /// <summary>散布组指纹：公共前缀 + 该组全部参数 + 组内 prefab instanceId/权重。</summary>
+        private string ComputeScatterFingerprint(int groupIndex)
+        {
+            var sb = new StringBuilder();
+            AppendFingerprintBase(sb);
+            ScatterConfigSO group = groupIndex < _config.scatterGroups.Count ? _config.scatterGroups[groupIndex] : null;
+            if (group == null) { sb.Append("sg=").Append(groupIndex).Append(":null"); return sb.ToString(); }
+            sb.Append("sg=").Append(groupIndex).Append(':')
+              .Append(group.chunkSize.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.chunkSize.y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.visibleDistance.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.density.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.randomScale.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.randomScale.y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.offRoadDistanceRange.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.offRoadDistanceRange.y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append((int)group.targetLayers).Append(';');
+            foreach (ScatterPrefabEntry entry in group.prefabs)
+            {
+                if (entry == null || entry.prefab == null) continue;
+                sb.Append(entry.prefab.GetInstanceID()).Append(':').Append(entry.weight).Append(',');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>摆件组指纹：公共前缀 + 该组全部参数 + 组内 prefab instanceId/权重/数量下限。</summary>
+        private string ComputePropFingerprint(int groupIndex)
+        {
+            var sb = new StringBuilder();
+            AppendFingerprintBase(sb);
+            PropConfigSO group = groupIndex < _config.propGroups.Count ? _config.propGroups[groupIndex] : null;
+            if (group == null) { sb.Append("pg=").Append(groupIndex).Append(":null"); return sb.ToString(); }
+            sb.Append("pg=").Append(groupIndex).Append(':')
+              .Append(group.chunkSize.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.chunkSize.y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.visibleDistance.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.maxFailedAttempts).Append(',')
+              .Append(group.expectedDensity.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.batchSize.x).Append(',').Append(group.batchSize.y).Append(',')
+              .Append((int)group.targetLayers).Append(',')
+              .Append(group.outOfBoundsTolerance.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append((int)group.arrangementBasis).Append(',')
+              .Append(group.arrangementRange.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.arrangementRange.y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append((int)group.rotationMode).Append(',').Append((int)group.distributionMode).Append(',')
+              .Append(group.distributionSpacing.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+            foreach (PropPrefabEntry entry in group.prefabs)
+            {
+                if (entry == null || entry.prefab == null) continue;
+                sb.Append(entry.prefab.GetInstanceID()).Append(':').Append(entry.weight).Append(':')
+                  .Append(entry.minimumCount).Append(',');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>定点组指纹：公共前缀 + 该组全部参数（prefab instanceId / 旋转 / 缩放 / 归一化位置列表）。</summary>
+        private string ComputeFixedFingerprint(int groupIndex)
+        {
+            var sb = new StringBuilder();
+            AppendFingerprintBase(sb);
+            FixedPointConfigSO group = groupIndex < _config.fixedPointGroups.Count ? _config.fixedPointGroups[groupIndex] : null;
+            if (group == null) { sb.Append("fg=").Append(groupIndex).Append(":null"); return sb.ToString(); }
+            sb.Append("fg=").Append(groupIndex).Append(':')
+              .Append(group.chunkSize.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.chunkSize.y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.visibleDistance.ToString("R", CultureInfo.InvariantCulture)).Append(',');
+            if (group.prefab != null)
+                sb.Append(group.prefab.GetInstanceID()).Append(',');
+            sb.Append(group.rotationDegrees.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(group.scale.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+            if (group.positions != null)
+                foreach (Vector2 pos in group.positions)
+                    sb.Append(pos.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                      .Append(pos.y.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+            return sb.ToString();
+        }
+
+        /// <summary>对 float[][] 做简单确定性哈希（FNV-1a），用于 MapData 内容指纹。</summary>
+        private static string HashMapData(float[][] data)
+        {
+            if (data == null) return "null";
+            unchecked
+            {
+                uint hash = 2166136261;
+                foreach (var row in data)
+                {
+                    if (row == null) continue;
+                    foreach (float value in row)
+                    {
+                        int rounded = Mathf.RoundToInt(value * 1000f);
+                        hash ^= (uint)rounded;
+                        hash *= 16777619;
+                    }
+                }
+                return hash.ToString("x8", CultureInfo.InvariantCulture);
             }
         }
 
@@ -291,6 +713,27 @@ namespace AiTerrainWorkflow.LayerEditor
                 PropConfigSO group = _config.propGroups[groupIndex];
                 if (group == null || group.prefabs == null || group.prefabs.Count == 0)
                     continue;
+
+                // 运行时：逐组读取缓存文件（Prop_{index}.txt）并校验指纹 → 直接实例化缓存摆件
+                bool usedCache = false;
+                if (Application.isPlaying)
+                {
+                    PlacementCache.CacheData groupCache = TryLoadPropGroupCache(groupIndex);
+                    if (groupCache != null && groupCache.props.Count > 0)
+                    {
+                        usedCache = InstantiatePropsFromCache(group, groupCache.props);
+                        if (!usedCache)
+                            Debug.LogWarning($"[TerrainBuilder] 摆件组 {group.groupName} 缓存无法解析（prefab instanceId 变化），已回退重新计算。");
+                        else
+                            Debug.Log($"[TerrainBuilder] 摆件组 {group.groupName} 指纹一致，已从 PlacementCache 复用位置。");
+                    }
+                    else if (groupCache == null && HasPlacementCacheKey(PlacementCache.PropFileName(groupIndex)))
+                    {
+                        Debug.LogWarning($"[TerrainBuilder] 摆件组 {group.groupName} 缓存指纹不一致或格式无效，已重新计算（不写盘）。");
+                    }
+                }
+                if (usedCache) continue;
+
                 float[][] basis = group.arrangementBasis == PropArrangementBasis.Distance
                     ? distance
                     : group.arrangementBasis == PropArrangementBasis.Height ? height : offRoad;
@@ -299,11 +742,77 @@ namespace AiTerrainWorkflow.LayerEditor
                     Debug.LogWarning($"[TerrainBuilder] 摆件组 {group.groupName} 缺少 {group.arrangementBasis} 数据，已跳过。");
                     continue;
                 }
-                BuildPropGroup(group, groupIndex, layerMap, basis, mapW, mapH, pixelWorldSize);
+                List<PropPlacement> placed = BuildPropGroup(
+                    group, groupIndex, layerMap, basis, mapW, mapH, pixelWorldSize);
+
+                // 编辑器模式：把本次重算的摆件位置收集进该组缓存（Build 末尾落盘）
+                if (!Application.isPlaying)
+                {
+                    var cache = new PlacementCache.CacheData
+                    {
+                        chunkSize = group.chunkSize,
+                        visibleDistance = group.visibleDistance,
+                        fingerprint = ComputePropFingerprint(groupIndex),
+                    };
+                    CollectPropsCache(cache, placed);
+                    while (_propCacheGroups.Count <= groupIndex)
+                        _propCacheGroups.Add(null);
+                    _propCacheGroups[groupIndex] = cache;
+                }
             }
         }
 
-        private void BuildPropGroup(
+        /// <summary>把某摆件组实际放置的结果转存为缓存条目（prefab instanceId + 世界 XZ + 偏航）。</summary>
+        private static void CollectPropsCache(PlacementCache.CacheData cache, List<PropPlacement> placed)
+        {
+            cache.props.Clear();
+            if (placed == null) return;
+            foreach (PropPlacement placement in placed)
+            {
+                if (placement == null || placement.prefab == null) continue;
+                cache.props.Add(new PlacementCache.PropPlacement
+                {
+                    prefabInstanceId = placement.prefab.GetInstanceID(),
+                    worldX = placement.worldXZ.x,
+                    worldZ = placement.worldXZ.y,
+                    yaw = placement.yaw,
+                });
+            }
+        }
+
+        /// <summary>用缓存条目直接实例化摆件（组内按 instanceId 解析 prefab；任一解析失败返回 false 回退重算）。</summary>
+        private bool InstantiatePropsFromCache(
+            PropConfigSO group, List<PlacementCache.PropPlacement> cached)
+        {
+            var prefabByInstanceId = new Dictionary<int, GameObject>();
+            for (int i = 0; i < group.prefabs.Count; i++)
+            {
+                PropPrefabEntry entry = group.prefabs[i];
+                if (entry == null || entry.prefab == null) continue;
+                int instanceId = entry.prefab.GetInstanceID();
+                if (!prefabByInstanceId.ContainsKey(instanceId)) prefabByInstanceId[instanceId] = entry.prefab;
+            }
+            for (int i = 0; i < cached.Count; i++)
+                if (!prefabByInstanceId.ContainsKey(cached[i].prefabInstanceId)) return false;
+
+            for (int i = 0; i < cached.Count; i++)
+            {
+                PlacementCache.PropPlacement entry = cached[i];
+                GameObject prefab = prefabByInstanceId[entry.prefabInstanceId];
+                var placement = new PropPlacement
+                {
+                    prefab = prefab,
+                    pixel = Vector2Int.zero,
+                    worldXZ = new Vector2(entry.worldX, entry.worldZ),
+                    yaw = entry.yaw,
+                    radius = GetPrefabHorizontalRadius(prefab),
+                };
+                InstantiateProp(placement);
+            }
+            return true;
+        }
+
+        private List<PropPlacement> BuildPropGroup(
             PropConfigSO group,
             int groupIndex,
             float[][] layerMap,
@@ -325,14 +834,14 @@ namespace AiTerrainWorkflow.LayerEditor
                     value > Mathf.Max(group.arrangementRange.x, group.arrangementRange.y)) continue;
                 validPixels.Add(new Vector2Int(x, z));
             }
-            if (validPixels.Count == 0) return;
+            if (validPixels.Count == 0) return null;
             var validPixelSet = new HashSet<Vector2Int>(validPixels);
 
             float validArea = validPixels.Count * pixelWorldSize.x * pixelWorldSize.y;
             int requestedCount = Mathf.Max(0, Mathf.RoundToInt(validArea * group.expectedDensity));
             List<int> prefabSchedule = BuildPropPrefabSchedule(group, requestedCount,
                 new System.Random(_config.propSeed ^ (groupIndex * 83492791)), out int minimumTotal);
-            if (prefabSchedule.Count == 0) return;
+            if (prefabSchedule.Count == 0) return null;
 
             var rng = new System.Random(_config.propSeed ^ (groupIndex * 83492791));
             var placed = new List<PropPlacement>();
@@ -373,6 +882,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 scheduleIndex += proposals;
                 failedBatches = 0;
             }
+            return placed;
         }
 
         private List<int> BuildPropPrefabSchedule(
@@ -638,18 +1148,49 @@ namespace AiTerrainWorkflow.LayerEditor
                 terrainPosition.z + pz * _wppZ);
         }
 
-        /// <summary>按归一化 X/Z、统一旋转和缩放实例化定点物体。</summary>
+        /// <summary>按归一化 X/Z、统一旋转和缩放实例化定点物体（支持缓存：运行时逐组读取 Fixed_{index}.txt）。</summary>
         private void ApplyFixedPoints()
         {
             ClearGeneratedRoot(ref _fixedRoot);
             var rootObject = new GameObject("_TerrainBuilderFixedPoints");
+            rootObject.hideFlags = HideFlags.HideInHierarchy;
+            if (!Application.isPlaying) rootObject.hideFlags |= HideFlags.DontSave;
             rootObject.transform.SetParent(transform, false);
             _fixedRoot = rootObject.transform;
 
-            foreach (FixedPointConfigSO group in _config.fixedPointGroups)
+            for (int groupIndex = 0; groupIndex < _config.fixedPointGroups.Count; groupIndex++)
             {
+                FixedPointConfigSO group = _config.fixedPointGroups[groupIndex];
                 if (group == null || group.prefab == null || group.positions == null)
                     continue;
+
+                // 运行时：逐组读取缓存文件（Fixed_{index}.txt）并校验指纹 → 直接实例化缓存定点
+                bool usedCache = false;
+                if (Application.isPlaying)
+                {
+                    PlacementCache.CacheData groupCache = TryLoadFixedGroupCache(groupIndex);
+                    if (groupCache != null && groupCache.fixedPoints.Count > 0)
+                    {
+                        usedCache = InstantiateFixedFromCache(group, groupCache.fixedPoints);
+                        if (!usedCache)
+                            Debug.LogWarning($"[TerrainBuilder] 定点组 {groupIndex} 缓存无法解析（prefab instanceId 变化），已回退重新计算。");
+                        else
+                            Debug.Log($"[TerrainBuilder] 定点组 {groupIndex} 指纹一致，已从 PlacementCache 复用位置。");
+                    }
+                    else if (groupCache == null && HasPlacementCacheKey(PlacementCache.FixedFileName(groupIndex)))
+                    {
+                        Debug.LogWarning($"[TerrainBuilder] 定点组 {groupIndex} 缓存指纹不一致或格式无效，已重新计算（不写盘）。");
+                    }
+                }
+                if (usedCache) continue;
+
+                // 正常按配置实例化；编辑器模式同时收集缓存
+                var cache = new PlacementCache.CacheData
+                {
+                    chunkSize = group.chunkSize,
+                    visibleDistance = group.visibleDistance,
+                    fingerprint = ComputeFixedFingerprint(groupIndex),
+                };
                 Quaternion rotation = Quaternion.Euler(0f, group.rotationDegrees, 0f);
                 float scale = Mathf.Max(0f, group.scale);
                 foreach (Vector2 uv in group.positions)
@@ -663,8 +1204,45 @@ namespace AiTerrainWorkflow.LayerEditor
                     instance.transform.localScale = Vector3.one * scale;
                     float worldY = SamplePlacementHeight(group.prefab, worldX, worldZ, rotation, scale);
                     instance.transform.position = new Vector3(worldX, worldY, worldZ);
+
+                    if (!Application.isPlaying)
+                        cache.fixedPoints.Add(new PlacementCache.FixedPlacement
+                        {
+                            prefabInstanceId = group.prefab.GetInstanceID(),
+                            worldX = worldX,
+                            worldZ = worldZ,
+                            yaw = group.rotationDegrees,
+                            scale = scale,
+                        });
+                }
+                if (!Application.isPlaying)
+                {
+                    while (_fixedCacheGroups.Count <= groupIndex)
+                        _fixedCacheGroups.Add(null);
+                    _fixedCacheGroups[groupIndex] = cache;
                 }
             }
+        }
+
+        /// <summary>用缓存条目直接实例化定点物体（按 instanceId 解析 prefab；任一解析失败返回 false 回退重算）。</summary>
+        private bool InstantiateFixedFromCache(FixedPointConfigSO group, List<PlacementCache.FixedPlacement> cached)
+        {
+            for (int i = 0; i < cached.Count; i++)
+            {
+                PlacementCache.FixedPlacement entry = cached[i];
+                if (entry.prefabInstanceId != group.prefab.GetInstanceID()) return false;
+            }
+            foreach (PlacementCache.FixedPlacement entry in cached)
+            {
+                Quaternion rotation = Quaternion.Euler(0f, entry.yaw, 0f);
+                var instance = Instantiate(group.prefab, _fixedRoot);
+                instance.transform.rotation = rotation;
+                instance.transform.localScale = Vector3.one * Mathf.Max(0f, entry.scale);
+                float worldY = SamplePlacementHeight(
+                    group.prefab, entry.worldX, entry.worldZ, rotation, Mathf.Max(0f, entry.scale));
+                instance.transform.position = new Vector3(entry.worldX, worldY, entry.worldZ);
+            }
+            return true;
         }
 
         private ObjectPool<GameObject> CreatePool(GameObject prefab, int key)
@@ -675,6 +1253,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     var go = Instantiate(prefab, _poolRoot);
                     go.name = key.ToString(); // 物体名称 = 池 key（回收时解析）
                     go.hideFlags = HideFlags.HideInHierarchy;
+                    if (!Application.isPlaying) go.hideFlags |= HideFlags.DontSave;
                     go.SetActive(false);
                     return go;
                 },
@@ -727,7 +1306,8 @@ namespace AiTerrainWorkflow.LayerEditor
         /// <summary>实例化 Build 时已经为该区块确定的散布位置列表。</summary>
         private void GenerateChunk(ScatterRuntime runtime, Vector2Int idx)
         {
-            if (!_dataReady)
+            // 层数据缺失时：仅当该区块没有已重建的缓存位置（缓存命中场景不依赖三图）才跳过
+            if (!_dataReady && !runtime.placementsByChunk.ContainsKey(idx))
             {
                 if (!_dataWarned)
                 {
@@ -783,7 +1363,12 @@ namespace AiTerrainWorkflow.LayerEditor
             int countZ = Mathf.CeilToInt(terrainSize.z / chunkDepth);
             for (int x = 0; x < countX; x++)
             for (int z = 0; z < countZ; z++)
-                PrecomputeScatterChunk(runtime, new Vector2Int(x, z));
+            {
+                var chunkIndex = new Vector2Int(x, z);
+                // 无限可见距离（负数）时注册全部区块，首次 MoveTo 一次性激活
+                runtime.chunks.RegisterChunk(chunkIndex);
+                PrecomputeScatterChunk(runtime, chunkIndex);
+            }
         }
 
         private void PrecomputeScatterChunk(ScatterRuntime runtime, Vector2Int idx)

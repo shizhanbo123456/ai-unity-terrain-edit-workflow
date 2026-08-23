@@ -31,6 +31,8 @@ namespace AiTerrainWorkflow.LayerEditor
         [Header("贴图混合")]
         [Tooltip("value-noise 加权混合的空间频率（世界距离）")]
         public float noiseScale = 1f;
+        [Tooltip("最终 alphamap 的五点均值平滑采样半径（alphamap 像素）；0 表示关闭")]
+        [Min(0)] public int textureSmoothingRadius = 0;
 
         [Header("坐标换算")]
         [Tooltip("仅用于编辑器无目标 Terrain 时的道路预览比例（米/像素）；实际 Build 会由目标 Terrain 尺寸与 Map 分辨率计算 X/Z 两轴比例")]
@@ -57,6 +59,8 @@ namespace AiTerrainWorkflow.LayerEditor
         public const int MinLayerCount = 2;
         /// <summary>Layer 数量上限（含 Layer0 透明层）。</summary>
         public const int MaxLayerCount = 16;
+        /// <summary>新建配置时默认创建的 Layer 数量（含 Layer0 透明层）。</summary>
+        public const int DefaultLayerCount = 3;
 
         [Tooltip("全部层级配置（Layer0 为完全透明过渡层，其余为可编辑颜色/名称的层级；数量 2~16）")]
         public List<LayerConfigSO> layers = new List<LayerConfigSO>();
@@ -155,6 +159,17 @@ namespace AiTerrainWorkflow.LayerEditor
 
         [Tooltip("本配置 MapData 目录下的 txt 文件引用（key + TextAsset）。编辑器写入后维护；运行时经它读取 float[][]。")]
         public List<MapDataRef> mapDataFiles = new List<MapDataRef>();
+
+        /// <summary>PlacementCache 文件引用项（key 形如 Scatter_00 / Prop_00 / Fixed_00）。</summary>
+        [Serializable]
+        public class PlacementCacheRef
+        {
+            public string key;
+            public TextAsset file;
+        }
+
+        [Tooltip("放置缓存（散布/摆件/定点）txt 引用，位于配置目录下与 MapData 同级的 PlacementCache/ 中。编辑器写入后维护；运行时经它读取放置结果。")]
+        public List<PlacementCacheRef> placementCacheFiles = new List<PlacementCacheRef>();
 
         /// <summary>MapData 文件引用项。</summary>
         [Serializable]
@@ -376,6 +391,121 @@ namespace AiTerrainWorkflow.LayerEditor
                 });
             }
             UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
+
+        /// <summary>PlacementCache 子目录名（与 MapData 同级，位于配置文件夹下）。</summary>
+        public const string PlacementCacheFolderName = "PlacementCache";
+
+        /// <summary>PlacementCache 目录（Assets 相对路径，如 Assets/.../TerrainGeneratorConfigs/&lt;配置&gt;/PlacementCache）；非编辑器环境返回 null。</summary>
+        public string PlacementCacheDirRelative()
+        {
+#if UNITY_EDITOR
+            string soPath = UnityEditor.AssetDatabase.GetAssetPath(this);
+            if (string.IsNullOrEmpty(soPath)) return null;
+            string dir = System.IO.Path.GetDirectoryName(soPath)?.Replace('\\', '/');
+            return string.IsNullOrEmpty(dir) ? null : dir + "/" + PlacementCacheFolderName;
+#else
+            return null;
+#endif
+        }
+
+        /// <summary>PlacementCache 目录（绝对路径）；非编辑器环境返回 null。</summary>
+        public string PlacementCacheDirAbsolute()
+        {
+            string rel = PlacementCacheDirRelative();
+            return string.IsNullOrEmpty(rel) ? null : System.IO.Path.Combine(Application.dataPath, "..", rel);
+        }
+
+        /// <summary>指定缓存文件名的 txt 文件路径（Assets 相对路径，fileName 形如 Scatter_00.txt）；非编辑器环境返回 null。</summary>
+        public string GetPlacementCacheFilePath(string fileName)
+        {
+            string rel = PlacementCacheDirRelative();
+            return string.IsNullOrEmpty(rel) ? null : rel + "/" + fileName;
+        }
+
+        private PlacementCacheRef GetPlacementCacheRef(string fileName)
+        {
+            foreach (var e in placementCacheFiles)
+                if (e != null && e.key == fileName) return e;
+            return null;
+        }
+
+        /// <summary>
+        /// 写入一个放置缓存 txt（PlacementCache/{fileName}）并重链引用（仅编辑器）。
+        /// 内容由 TerrainBuilder 在非运行时 Build 后生成；此处只负责落盘与引用维护。
+        /// </summary>
+        public void WritePlacementCacheFile(string fileName, string content)
+        {
+#if UNITY_EDITOR
+            string rel = GetPlacementCacheFilePath(fileName);
+            string dirAbs = PlacementCacheDirAbsolute();
+            if (string.IsNullOrEmpty(rel) || string.IsNullOrEmpty(dirAbs)) return;
+
+            if (!System.IO.Directory.Exists(dirAbs))
+                System.IO.Directory.CreateDirectory(dirAbs);
+
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(dirAbs, fileName),
+                content, System.Text.Encoding.UTF8);
+            UnityEditor.AssetDatabase.Refresh();
+            var entry = GetPlacementCacheRef(fileName);
+            if (entry == null)
+            {
+                entry = new PlacementCacheRef { key = fileName };
+                placementCacheFiles.Add(entry);
+            }
+            entry.file = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>(rel);
+            UnityEditor.EditorUtility.SetDirty(this);
+            UnityEditor.AssetDatabase.SaveAssets();
+#endif
+        }
+
+        /// <summary>
+        /// 删除一个放置缓存文件与引用（仅编辑器）。删除生成组时应同步调用，避免残留旧缓存。
+        /// </summary>
+        public void DeletePlacementCacheFile(string fileName)
+        {
+#if UNITY_EDITOR
+            string dirAbs = PlacementCacheDirAbsolute();
+            if (!string.IsNullOrEmpty(dirAbs))
+            {
+                string path = System.IO.Path.Combine(dirAbs, fileName);
+                if (System.IO.File.Exists(path))
+                    System.IO.File.Delete(path);
+            }
+            placementCacheFiles.RemoveAll(e => e != null && e.key == fileName);
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
+
+        /// <summary>
+        /// 同步 PlacementCache 引用：刷新资产后按文件名重链 TextAsset，移除已不存在的文件引用。
+        /// </summary>
+        public void RefreshPlacementCacheRefs(bool refreshAssets = true)
+        {
+#if UNITY_EDITOR
+            string dirRel = PlacementCacheDirRelative();
+            if (string.IsNullOrEmpty(dirRel)) return;
+            if (refreshAssets) UnityEditor.AssetDatabase.Refresh();
+
+            foreach (var entry in placementCacheFiles)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.key)) continue;
+                string p = dirRel + "/" + entry.key;
+                entry.file = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>(p);
+            }
+            string dirFull = PlacementCacheDirAbsolute();
+            if (!string.IsNullOrEmpty(dirFull))
+            {
+                placementCacheFiles.RemoveAll(e =>
+                {
+                    if (e == null || string.IsNullOrEmpty(e.key)) return true;
+                    return !System.IO.File.Exists(System.IO.Path.Combine(dirFull, e.key));
+                });
+            }
+            UnityEditor.EditorUtility.SetDirty(this);
+            UnityEditor.AssetDatabase.SaveAssets();
 #endif
         }
     }

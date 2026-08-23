@@ -188,7 +188,9 @@ namespace AiTerrainWorkflow.LayerEditor
                     if (layerIds[idx] > 0) // 语义层（不包含 Layer0 / 透明 -1）
                     {
                         float d = Mathf.Sqrt(Mathf.Max(0f, gy[y]));
-                        off[idx] = d;
+                        // 无道路覆盖（EDT 距离为无穷大 Big=1e20 的平方根 ≈ 1e10）→ 视为 0，
+                        // 避免散布/摆件按 offRoad 范围过滤时把"无道路区域"全部剔除
+                        off[idx] = d >= 1e9f ? 0f : d;
                     }
                     else
                     {

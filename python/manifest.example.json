@@ -6,7 +6,7 @@
   "heightScale": 0.02,
   "smoothStep": 1,
   "smoothIterations": 0,
-  "paintConfig": {"roadStep":2.0,"walkStartTries":10,"walkCandidateCount":8,"startCoverStopSamples":8,"walkSeed":7001,"maxStepsPerPath":256,"gApplySpacing":3.0,"noiseScale":1.0,"worldPerPixel":0.4},
+  "paintConfig": {"roadStep":2.0,"walkStartTries":10,"walkCandidateCount":8,"startCoverStopSamples":8,"walkSeed":7001,"maxStepsPerPath":256,"gApplySpacing":3.0,"noiseScale":1.0,"textureSmoothingRadius":1,"worldPerPixel":0.4},
   "naturalSeed": 101,
   "roadSeed": 202,
   "scatterSeed": 303,
@@ -33,8 +33,8 @@
   ],
   "adjacencyGroups": [{"values":[1,2]},{"values":[3,4]}],
   "prefabs": [
-    {"path":"Assets/SourcePrefabs/Tree.prefab","billboardMode":"CrossPlanes","twoPointHeightAdaptation":false},
-    {"path":"Assets/SourcePrefabs/Bench.prefab","billboardMode":"None","twoPointHeightAdaptation":true}
+    {"path":"Assets/SourcePrefabs/Tree.prefab","billboardMode":"CrossPlanes","twoPointHeightAdaptation":false,"lodTransition":0.1},
+    {"path":"Assets/SourcePrefabs/Bench.prefab","billboardMode":"None","twoPointHeightAdaptation":true,"lodTransition":0.1}
   ],
   "areaOperations": [
     {"type":"Rectangle","a":[16,16],"b":[495,495],"c":[0,0],"radius":0,"layerIndex":1},
@@ -42,8 +42,8 @@
     {"type":"Triangle","a":[100,100],"b":[180,100],"c":[140,190],"radius":0,"layerIndex":3}
   ],
   "scatterGroups": [{"name":"Trees","chunkSize":[16,16],"visibleDistance":60,"density":0.05,"randomScale":[0.8,1.2],"offRoadRange":[2,10000],"layerMask":2,"prefabs":[{"path":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Tree.prefab","weight":10,"minimumCount":0}]}],
-  "propGroups": [{"name":"Benches","maxFailedAttempts":20,"density":0.01,"batchSize":[1,4],"layerMask":2,"outOfBoundsTolerance":1,"basis":"OffRoad","range":[0,3],"rotation":"AlongContour","distribution":"Scatter","spacing":1,"prefabs":[{"path":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Bench.prefab","weight":10,"minimumCount":1}]}],
-  "fixedGroups": [{"markerColor":[0,1,1,1],"prefab":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Bench.prefab","positions":[0.25,0.25,0.75,0.75],"rotation":90,"scale":1}],
+  "propGroups": [{"name":"Benches","chunkSize":[16,16],"visibleDistance":60,"maxFailedAttempts":20,"density":0.01,"batchSize":[1,4],"layerMask":2,"outOfBoundsTolerance":1,"basis":"OffRoad","range":[0,3],"rotation":"AlongContour","distribution":"Scatter","spacing":1,"prefabs":[{"path":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Bench.prefab","weight":10,"minimumCount":1}]}],
+  "fixedGroups": [{"markerColor":[0,1,1,1],"prefab":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Bench.prefab","positions":[],"rotation":90,"scale":1,"chunkSize":[16,16],"visibleDistance":60,"positionCount":2,"nonZeroCount":2,"positionsPath":"Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/CommandLineTerrain/FixedPointConfig/Fixed_00.asset"}],
   "bake": true,
   "terrain": "",
   "applyThrough": "FixedPointEdit"

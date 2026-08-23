@@ -18,21 +18,38 @@ namespace AiTerrainWorkflow
     {
         private readonly Vector2 _chunkSize;
         private readonly float _distance;
+        private readonly bool _infinite;
         private readonly HashSet<Vector2Int> _active = new HashSet<Vector2Int>();
+        private readonly List<Vector2Int> _registeredChunks = new List<Vector2Int>();
+        private bool _infiniteActivated;
 
         /// <summary>
         /// 构造区块更新管理器。
         /// </summary>
         /// <param name="chunkSize">区块尺寸（x / y=z 方向）；分量必须 &gt; 0（内部会兜底为极小正数）。</param>
-        /// <param name="distance">激活半径：区块中心到观察点的距离 ≤ 该值则激活；&lt; 0 按 0 处理。</param>
+        /// <param name="distance">激活半径：区块中心到观察点的距离 ≤ 该值则激活；&lt; 0 表示**无限**——
+        /// 第一次 <see cref="MoveTo"/> 一次性激活全部已注册区块（<see cref="RegisterChunk"/>），
+        /// 之后的更新不再有任何变动（active/inactive 恒为空）。</param>
         public ChunkUpdateManager(Vector2 chunkSize, float distance)
         {
             _chunkSize = new Vector2(Mathf.Max(0.0001f, chunkSize.x), Mathf.Max(0.0001f, chunkSize.y));
-            _distance = Mathf.Max(0f, distance);
+            _infinite = distance < 0f;
+            _distance = _infinite ? 0f : Mathf.Max(0f, distance);
         }
 
         /// <summary>当前激活的区块索引集合（只读视图；修改请走 MoveTo）。</summary>
         public IReadOnlyCollection<Vector2Int> ActiveChunks => _active;
+
+        /// <summary>
+        /// 注册一个区块索引（无限模式专用：这些区块将在第一次 MoveTo 时全部激活）。
+        /// 非无限模式调用无副作用。重复注册自动去重。
+        /// </summary>
+        public void RegisterChunk(Vector2Int index)
+        {
+            if (!_infinite) return;
+            if (!_registeredChunks.Contains(index))
+                _registeredChunks.Add(index);
+        }
 
         /// <summary>
         /// 将观察点移动到 pos（Vector2(x, z)）。
@@ -40,11 +57,25 @@ namespace AiTerrainWorkflow
         ///   - 移动后进入激活半径的区块 → 写入 <paramref name="activeChunks"/>；
         ///   - 移动后超出激活半径的区块 → 写入 <paramref name="inactiveChunks"/>。
         /// 完成后内部记录的激活集合更新为最新状态。初始集合为空，**第一次 MoveTo 会一次性激活范围内全部区块**。
+        ///
+        /// 无限模式（构造时 distance &lt; 0）：第一次 MoveTo 激活全部已注册区块，此后恒为空（不再变动）。
         /// </summary>
         public void MoveTo(Vector2 pos, out List<Vector2Int> activeChunks, out List<Vector2Int> inactiveChunks)
         {
             activeChunks = new List<Vector2Int>();
             inactiveChunks = new List<Vector2Int>();
+
+            if (_infinite)
+            {
+                if (!_infiniteActivated)
+                {
+                    _infiniteActivated = true;
+                    activeChunks.AddRange(_registeredChunks);
+                    _active.Clear();
+                    _active.UnionWith(_registeredChunks);
+                }
+                return;
+            }
 
             // 候选范围：以 pos 为中心、半径 distance 的矩形覆盖到的区块（±1 保险后按中心距精确过滤）
             int xMin = Mathf.FloorToInt((pos.x - _distance) / _chunkSize.x) - 1;

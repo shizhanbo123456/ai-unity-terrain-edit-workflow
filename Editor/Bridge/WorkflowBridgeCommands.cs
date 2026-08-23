@@ -18,6 +18,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public int count;
         public bool valid;
         public string[] errors;
+        public string json;
     }
 
     [Serializable] public sealed class IntGroupSpec { public int[] values; }
@@ -34,6 +35,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public int maxStepsPerPath = 256;
         public float gApplySpacing = 3f;
         public float noiseScale = 1f;
+        public int textureSmoothingRadius;
         public float worldPerPixel = 0.4f;
     }
     [Serializable]
@@ -56,6 +58,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public string path;
         public string billboardMode;
         public bool twoPointHeightAdaptation;
+        public float lodTransition = 0.1f;
     }
     [Serializable]
     public sealed class PaintOperationSpec
@@ -83,6 +86,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
     public sealed class PropGroupSpec
     {
         public string name;
+        public float[] chunkSize;
+        public float visibleDistance = 60f;
         public int maxFailedAttempts = 20;
         public float density = 0.01f;
         public int[] batchSize;
@@ -103,6 +108,11 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public float[] positions;
         public float rotation;
         public float scale = 1f;
+        public float[] chunkSize;
+        public float visibleDistance = 60f;
+        public int positionCount;
+        public int nonZeroCount;
+        public string positionsPath;
     }
     [Serializable]
     public sealed class WorkflowManifest
@@ -147,6 +157,23 @@ namespace AiTerrainWorkflow.Editor.Bridge
             ApplyManifest(project, manifest);
             SaveProject(project);
             return Result("configure", AssetDatabase.GetAssetPath(project), "configured", 1);
+        }
+
+        [BridgeCommand("workflow.export", "将当前项目完整配置导出为 manifest JSON。参数: path=项目")]
+        public static object Export(BridgeContext context, BridgeArgs args)
+        {
+            TerrainPaintProjectSO project = LoadProject(args.path);
+            WorkflowManifest manifest = BuildManifest(project);
+            return new WorkflowBridgeResult
+            {
+                operation = "export",
+                projectPath = AssetDatabase.GetAssetPath(project),
+                message = "exported",
+                count = 1,
+                valid = true,
+                errors = Array.Empty<string>(),
+                json = JsonUtility.ToJson(manifest, true),
+            };
         }
 
         [BridgeCommand("workflow.prefab.build", "构建备用 Prefab。参数: path=源Prefab, type=BillboardMode, placed=两点高度适应")]
@@ -259,7 +286,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 throw new InvalidOperationException("项目已存在: " + projectPath);
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name; project.mapResolution = resolution;
-            for (int i = 0; i < TerrainPaintProjectSO.MaxLayerCount; i++)
+            for (int i = 0; i < TerrainPaintProjectSO.DefaultLayerCount; i++)
             {
                 var layer = ScriptableObject.CreateInstance<LayerConfigSO>();
                 layer.color = i == 0 ? LayerPalette.Transparent : LayerPalette.PresetColors[Mathf.Min(i - 1, LayerPalette.PresetColors.Length - 1)];
@@ -295,12 +322,179 @@ namespace AiTerrainWorkflow.Editor.Bridge
             project.SyncAllLayerWeights();
         }
 
+        private static WorkflowManifest BuildManifest(TerrainPaintProjectSO project)
+        {
+            TerrainPaintConfig cfg = project.config ?? new TerrainPaintConfig();
+            return new WorkflowManifest
+            {
+                projectPath = AssetDatabase.GetAssetPath(project),
+                projectName = project.name,
+                resolution = project.mapResolution,
+                heightSeed = project.heightSeed,
+                heightScale = project.heightScale,
+                smoothStep = project.smoothStep,
+                smoothIterations = project.smoothIterations,
+                paintConfig = new PaintConfigSpec
+                {
+                    roadStep = cfg.roadStep,
+                    walkStartTries = cfg.walkStartTries,
+                    walkCandidateCount = cfg.walkCandidateCount,
+                    startCoverStopSamples = cfg.startCoverStopSamples,
+                    walkSeed = cfg.walkSeed,
+                    maxStepsPerPath = cfg.maxStepsPerPath,
+                    gApplySpacing = cfg.gApplySpacing,
+                    noiseScale = cfg.noiseScale,
+                    textureSmoothingRadius = cfg.textureSmoothingRadius,
+                    worldPerPixel = cfg.worldPerPixel,
+                },
+                naturalSeed = project.naturalSeed,
+                roadSeed = project.roadSeed,
+                scatterSeed = project.scatterSeed,
+                propSeed = project.propSeed,
+                naturalTerrainLayers = ToPaths(project.naturalTerrainLayers),
+                roadTerrainLayers = ToPaths(project.roadTerrainLayers),
+                layers = ExportLayers(project.layers),
+                adjacencyGroups = ExportAdjacencyGroups(project.adjacencyGroups),
+                // 已处理的备用 Prefab 可被用户自由编辑，无法可靠反推其源 Prefab；导出时保留为空，
+                // 生成组则直接引用已处理的 Generated/Prefabs 资产。
+                prefabs = Array.Empty<PrefabSpec>(),
+                areaOperations = ExportOperations(project.paintOperations),
+                scatterGroups = ExportScatterGroups(project.scatterGroups),
+                propGroups = ExportPropGroups(project.propGroups),
+                fixedGroups = ExportFixedGroups(project.fixedPointGroups),
+                bake = true,
+                terrain = "",
+                applyThrough = TerrainWorkflowStage.FixedPointEdit.ToString(),
+            };
+        }
+
+        private static string[] ToPaths<T>(IEnumerable<T> assets) where T : UnityEngine.Object
+        {
+            if (assets == null) return Array.Empty<string>();
+            var paths = new List<string>();
+            foreach (T asset in assets) paths.Add(asset == null ? "" : AssetDatabase.GetAssetPath(asset));
+            return paths.ToArray();
+        }
+
+        private static LayerSpec[] ExportLayers(List<LayerConfigSO> layers)
+        {
+            var result = new LayerSpec[TerrainPaintProjectSO.MaxLayerCount];
+            for (int i = 0; i < result.Length; i++)
+            {
+                LayerConfigSO layer = layers != null && i < layers.Count ? layers[i] : null;
+                Color color = layer != null ? layer.color : Color.clear;
+                result[i] = new LayerSpec
+                {
+                    index = i,
+                    name = layer != null ? layer.layerName : "Layer" + i,
+                    color = new[] { color.r, color.g, color.b, color.a },
+                    heightRange = layer != null ? new[] { layer.heightRange.x, layer.heightRange.y } : new[] { 0f, 1f },
+                    generateRoad = layer != null && layer.generateRoad,
+                    roadWidth = layer != null ? layer.roadWidth : 0f,
+                    roadSpacingMin = layer != null ? layer.roadSpacingMin : 0f,
+                    roadFinalRemap = ExportCurve(layer != null ? layer.roadFinalRemap : null),
+                    naturalWeights = layer != null ? layer.naturalLayerWeights.ToArray() : Array.Empty<int>(),
+                    roadWeights = layer != null ? layer.roadLayerWeights.ToArray() : Array.Empty<int>(),
+                };
+            }
+            return result;
+        }
+
+        private static CurveKeySpec[] ExportCurve(AnimationCurve curve)
+        {
+            Keyframe[] keys = curve != null ? curve.keys : AnimationCurve.Linear(0f, 0f, 1f, 1f).keys;
+            var result = new CurveKeySpec[keys.Length];
+            for (int i = 0; i < keys.Length; i++)
+                result[i] = new CurveKeySpec { time = keys[i].time, value = keys[i].value, inTangent = keys[i].inTangent, outTangent = keys[i].outTangent, inWeight = keys[i].inWeight, outWeight = keys[i].outWeight, weightedMode = (int)keys[i].weightedMode };
+            return result;
+        }
+
+        private static IntGroupSpec[] ExportAdjacencyGroups(List<List<int>> groups)
+        {
+            if (groups == null) return Array.Empty<IntGroupSpec>();
+            var result = new IntGroupSpec[groups.Count];
+            for (int i = 0; i < groups.Count; i++) result[i] = new IntGroupSpec { values = groups[i]?.ToArray() ?? Array.Empty<int>() };
+            return result;
+        }
+
+        private static PaintOperationSpec[] ExportOperations(List<LayerPaintOperation> operations)
+        {
+            if (operations == null) return Array.Empty<PaintOperationSpec>();
+            var result = new PaintOperationSpec[operations.Count];
+            for (int i = 0; i < operations.Count; i++)
+            {
+                LayerPaintOperation op = operations[i];
+                result[i] = new PaintOperationSpec { type = op.type.ToString(), a = new[] { op.pointA.x, op.pointA.y }, b = new[] { op.pointB.x, op.pointB.y }, c = new[] { op.pointC.x, op.pointC.y }, radius = op.radius, layerIndex = op.layerIndex };
+            }
+            return result;
+        }
+
+        private static ScatterGroupSpec[] ExportScatterGroups(List<ScatterConfigSO> groups)
+        {
+            if (groups == null) return Array.Empty<ScatterGroupSpec>();
+            var result = new List<ScatterGroupSpec>();
+            foreach (ScatterConfigSO group in groups)
+            {
+                if (group == null) continue;
+                var prefabs = new List<WeightedPrefabSpec>();
+                foreach (ScatterPrefabEntry entry in group.prefabs) prefabs.Add(new WeightedPrefabSpec { path = entry.prefab == null ? "" : AssetDatabase.GetAssetPath(entry.prefab), weight = entry.weight });
+                result.Add(new ScatterGroupSpec { name = group.groupName, chunkSize = new[] { group.chunkSize.x, group.chunkSize.y }, visibleDistance = group.visibleDistance, density = group.density, randomScale = new[] { group.randomScale.x, group.randomScale.y }, offRoadRange = new[] { group.offRoadDistanceRange.x, group.offRoadDistanceRange.y }, layerMask = (int)group.targetLayers, prefabs = prefabs.ToArray() });
+            }
+            return result.ToArray();
+        }
+
+        private static PropGroupSpec[] ExportPropGroups(List<PropConfigSO> groups)
+        {
+            if (groups == null) return Array.Empty<PropGroupSpec>();
+            var result = new List<PropGroupSpec>();
+            foreach (PropConfigSO group in groups)
+            {
+                if (group == null) continue;
+                var prefabs = new List<WeightedPrefabSpec>();
+                foreach (PropPrefabEntry entry in group.prefabs) prefabs.Add(new WeightedPrefabSpec { path = entry.prefab == null ? "" : AssetDatabase.GetAssetPath(entry.prefab), weight = entry.weight, minimumCount = entry.minimumCount });
+                result.Add(new PropGroupSpec { name = group.groupName, chunkSize = new[] { group.chunkSize.x, group.chunkSize.y }, visibleDistance = group.visibleDistance, maxFailedAttempts = group.maxFailedAttempts, density = group.expectedDensity, batchSize = new[] { group.batchSize.x, group.batchSize.y }, layerMask = (int)group.targetLayers, outOfBoundsTolerance = group.outOfBoundsTolerance, basis = group.arrangementBasis.ToString(), range = new[] { group.arrangementRange.x, group.arrangementRange.y }, rotation = group.rotationMode.ToString(), distribution = group.distributionMode.ToString(), spacing = group.distributionSpacing, prefabs = prefabs.ToArray() });
+            }
+            return result.ToArray();
+        }
+
+        private static FixedGroupSpec[] ExportFixedGroups(List<FixedPointConfigSO> groups)
+        {
+            if (groups == null) return Array.Empty<FixedGroupSpec>();
+            var result = new List<FixedGroupSpec>();
+            foreach (FixedPointConfigSO group in groups)
+            {
+                if (group == null) continue;
+                Color color = group.markerColor;
+                int nonZero = 0;
+                if (group.positions != null)
+                    foreach (Vector2 position in group.positions)
+                        if (position.x != 0f || position.y != 0f) nonZero++;
+                // 定点位置列表不写入 JSON（可能大量），只输出数据条数/非0数量与资产路径；
+                // 导入时若 positions 为空且 positionsPath 指向现存资产，则从该资产复制位置。
+                result.Add(new FixedGroupSpec
+                {
+                    markerColor = new[] { color.r, color.g, color.b, color.a },
+                    prefab = group.prefab == null ? "" : AssetDatabase.GetAssetPath(group.prefab),
+                    positions = Array.Empty<float>(),
+                    positionCount = group.positions != null ? group.positions.Count : 0,
+                    nonZeroCount = nonZero,
+                    positionsPath = AssetDatabase.GetAssetPath(group),
+                    rotation = group.rotationDegrees,
+                    scale = group.scale,
+                    chunkSize = new[] { group.chunkSize.x, group.chunkSize.y },
+                    visibleDistance = group.visibleDistance,
+                });
+            }
+            return result.ToArray();
+        }
+
         private static void ApplyPaintConfig(TerrainPaintConfig target, PaintConfigSpec source)
         {
             target.roadStep = source.roadStep; target.walkStartTries = source.walkStartTries;
             target.walkCandidateCount = source.walkCandidateCount; target.startCoverStopSamples = source.startCoverStopSamples;
             target.walkSeed = source.walkSeed; target.maxStepsPerPath = source.maxStepsPerPath;
             target.gApplySpacing = source.gApplySpacing; target.noiseScale = source.noiseScale;
+            target.textureSmoothingRadius = Mathf.Max(0, source.textureSmoothingRadius);
             target.worldPerPixel = source.worldPerPixel;
         }
 
@@ -348,6 +542,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
             {
                 PropGroupSpec s = specs[i]; if (s == null) continue;
                 var group = ScriptableObject.CreateInstance<PropConfigSO>(); group.groupName = s.name;
+                if (s.chunkSize?.Length >= 2) group.chunkSize = new Vector2(s.chunkSize[0], s.chunkSize[1]);
+                group.visibleDistance = s.visibleDistance;
                 group.maxFailedAttempts = s.maxFailedAttempts; group.expectedDensity = s.density;
                 if (s.batchSize?.Length >= 2) group.batchSize = new Vector2Int(s.batchSize[0], s.batchSize[1]);
                 group.targetLayers = (TerrainWorkflowLayerMask)(ushort)s.layerMask; group.outOfBoundsTolerance = s.outOfBoundsTolerance;
@@ -361,14 +557,44 @@ namespace AiTerrainWorkflow.Editor.Bridge
 
         private static void ReplaceFixedGroups(TerrainPaintProjectSO project, FixedGroupSpec[] specs)
         {
+            // JSON 只含定点位置摘要（导出约定：位置不写入 JSON）。若某组 positions 为空但 positionsPath
+            // 指向现存资产，需在删除旧资产前先从源资产复制位置，否则删除后加载不到。
+            var sourcePositions = new List<List<Vector2>>();
+            if (specs != null)
+            {
+                for (int i = 0; i < specs.Length; i++)
+                {
+                    var list = new List<Vector2>();
+                    FixedGroupSpec s = specs[i];
+                    if (s != null && (s.positions == null || s.positions.Length == 0) &&
+                        !string.IsNullOrEmpty(s.positionsPath))
+                    {
+                        var source = AssetDatabase.LoadAssetAtPath<FixedPointConfigSO>(NormalizeAssetPath(s.positionsPath));
+                        if (source != null && source.positions != null)
+                            list.AddRange(source.positions);
+                    }
+                    sourcePositions.Add(list);
+                }
+            }
+
             DeleteReferencedAssets(project.fixedPointGroups); project.fixedPointGroups.Clear();
             string folder = ProjectDirectory(project) + "/FixedPointConfig"; EnsureFolder(folder);
             for (int i = 0; i < specs.Length; i++)
             {
                 FixedGroupSpec s = specs[i]; if (s == null) continue;
                 var group = ScriptableObject.CreateInstance<FixedPointConfigSO>(); group.prefab = LoadPrefab(s.prefab); group.rotationDegrees = s.rotation; group.scale = s.scale;
+                if (s.chunkSize?.Length >= 2) group.chunkSize = new Vector2(s.chunkSize[0], s.chunkSize[1]);
+                group.visibleDistance = s.visibleDistance;
                 if (s.markerColor?.Length >= 4) group.markerColor = new Color(s.markerColor[0], s.markerColor[1], s.markerColor[2], s.markerColor[3]);
-                if (s.positions != null) for (int n = 0; n + 1 < s.positions.Length; n += 2) group.positions.Add(new Vector2(s.positions[n], s.positions[n + 1]));
+                if (s.positions != null && s.positions.Length > 0)
+                {
+                    for (int n = 0; n + 1 < s.positions.Length; n += 2)
+                        group.positions.Add(new Vector2(s.positions[n], s.positions[n + 1]));
+                }
+                else if (i < sourcePositions.Count)
+                {
+                    group.positions.AddRange(sourcePositions[i]);
+                }
                 AssetDatabase.CreateAsset(group, folder + $"/Fixed_{i:00}.asset"); project.fixedPointGroups.Add(group);
             }
         }
@@ -434,7 +660,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         private static void BuildPrefabSpec(PrefabSpec spec)
         {
             if (spec == null) return; GameObject source = LoadPrefab(spec.path); if (source == null) throw new ArgumentException("找不到 Prefab: " + spec.path);
-            PrefabProcessingUtility.BuildCandidatePrefab(source, ParseEnum(spec.billboardMode, BillboardMode.None), spec.twoPointHeightAdaptation);
+            PrefabProcessingUtility.BuildCandidatePrefab(source, ParseEnum(spec.billboardMode, BillboardMode.None), spec.twoPointHeightAdaptation, spec.lodTransition);
         }
         private static Terrain FindTerrain(string name)
         {

@@ -65,6 +65,8 @@ namespace AiTerrainWorkflow.LayerEditor
         private readonly List<GameObject> _candidatePrefabSources = new List<GameObject>();
         private BillboardMode _candidateBillboardMode;
         private bool _candidateTwoPointHeightAdaptation;
+        [Tooltip("LOD0→Billboard 的屏幕相对高度切换阈值（0~1）；仅处理时生效，不写入工作流配置")]
+        private float _candidateLodTransition = 0.1f;
 
         // 创建配置 UI
         private bool _creating;
@@ -335,7 +337,7 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             EditorGUILayout.HelpBox(
                 "未选择地形配置。\n\n请在上方 ObjectField 中选择一个已创建的配置，\n" +
-                "或点击「创建新地形配置」新建一个（会自动创建子文件夹、总 SO 与 16 个层级 SO）。",
+                "或点击「创建新地形配置」新建一个（会自动创建子文件夹、总 SO 与 3 个层级 SO）。",
                 MessageType.Info);
         }
 
@@ -365,8 +367,8 @@ namespace AiTerrainWorkflow.LayerEditor
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name;
             project.mapResolution = _createResolution;
-            // 默认创建上限数量的层（Layer0 透明 + 其余颜色层），可在工作流配置中调整
-            for (int i = 0; i < TerrainPaintProjectSO.MaxLayerCount; i++)
+            // 默认创建 3 层（Layer0 透明 + 2 个颜色层），可在工作流配置中调整
+            for (int i = 0; i < TerrainPaintProjectSO.DefaultLayerCount; i++)
             {
                 project.layers.Add(CreateLayerSO(i, dirRel));
             }
@@ -600,6 +602,12 @@ namespace AiTerrainWorkflow.LayerEditor
                 "并写入 PrefabStructureInfo。生成后可以编辑其子物体变换、增删子物体或拼合多个对象；再次处理不会覆盖这些内容。" +
                 "散布、摆件和定点只能引用 Generated/Prefabs 中的备用预制体，不能直接引用其它 Prefab。",
                 MessageType.Info);
+            EditorGUILayout.HelpBox(
+                "添加备选 Prefab 后请到 Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs 找到对应备用 Prefab 确认内容正确：" +
+                "部分源 Prefab 的模型中心正下方不在原点（模型 pivot 不在底部中心或有偏移），" +
+                "需要调整子物体变换让模型按预期落位（通常底部中心对准根节点原点），确认无误后再更新 Bounds / 生成 Billboard。" +
+                "修正只作用于子物体，根节点保持零变换。",
+                MessageType.Warning);
 
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("批量添加备用预制体", EditorStyles.boldLabel);
@@ -624,6 +632,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 "Billboard 模式", _candidateBillboardMode);
             _candidateTwoPointHeightAdaptation = EditorGUILayout.Toggle(
                 "两点高度适应", _candidateTwoPointHeightAdaptation);
+            _candidateLodTransition = EditorGUILayout.Slider(
+                "LOD Billboard 切换阈值", _candidateLodTransition, 0f, 1f);
 
             bool hasCandidateSource = _candidatePrefabSources.Exists(prefab => prefab != null);
             using (new EditorGUI.DisabledScope(!hasCandidateSource))
@@ -639,7 +649,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.None);
 
             if (GUILayout.Button("批量更新 Billboard", GUILayout.Height(24f)))
-                RunCandidatePrefabBatch("Billboard", PrefabProcessingUtility.UpdateAllBillboards);
+                RunCandidatePrefabBatch("Billboard", () => PrefabProcessingUtility.UpdateAllBillboards(_candidateLodTransition));
 
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -663,7 +673,8 @@ namespace AiTerrainWorkflow.LayerEditor
                     PrefabProcessingUtility.BuildCandidatePrefab(
                         sourcePrefab,
                         _candidateBillboardMode,
-                        _candidateTwoPointHeightAdaptation);
+                        _candidateTwoPointHeightAdaptation,
+                        _candidateLodTransition);
                     created++;
                 }
                 catch (System.Exception exception)
@@ -1053,6 +1064,7 @@ namespace AiTerrainWorkflow.LayerEditor
             cfg.maxStepsPerPath = Mathf.Max(1, EditorGUILayout.IntField("Max Steps Per Path", cfg.maxStepsPerPath));
             cfg.gApplySpacing = Mathf.Max(0.01f, EditorGUILayout.FloatField("G Apply Spacing / 防卷曲 (m)", cfg.gApplySpacing));
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
+            cfg.textureSmoothingRadius = Mathf.Max(0, EditorGUILayout.IntField("贴图平滑半径 (alphamap 像素)", cfg.textureSmoothingRadius));
             cfg.worldPerPixel = Mathf.Max(0.001f,
                 EditorGUILayout.FloatField("预览比例 (m/px)", cfg.worldPerPixel));
 
@@ -1744,8 +1756,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 group.chunkSize = EditorGUILayout.Vector2Field("区块尺寸（米，x/z）", group.chunkSize);
                 group.chunkSize.x = Mathf.Max(0.0001f, group.chunkSize.x);
                 group.chunkSize.y = Mathf.Max(0.0001f, group.chunkSize.y);
-                group.visibleDistance = Mathf.Max(0f,
-                    EditorGUILayout.FloatField("可见距离（米）", group.visibleDistance));
+                group.visibleDistance = EditorGUILayout.FloatField(
+                    "可见距离（米，负=无限）", group.visibleDistance);
                 group.density = Mathf.Max(0f, EditorGUILayout.FloatField("密度（个/㎡）", group.density));
 
                 var scale = EditorGUILayout.Vector2Field("随机缩放（min/max）", group.randomScale);
@@ -1840,6 +1852,7 @@ namespace AiTerrainWorkflow.LayerEditor
             if (index < _scatterFoldouts.Count) _scatterFoldouts.RemoveAt(index);
             EditorUtility.SetDirty(_project);
             if (!string.IsNullOrEmpty(assetPath)) AssetDatabase.DeleteAsset(assetPath);
+            _project.DeletePlacementCacheFile(PlacementCache.ScatterFileName(index));
             AssetDatabase.SaveAssets();
         }
 
@@ -1890,6 +1903,8 @@ namespace AiTerrainWorkflow.LayerEditor
             if (_propFoldouts[index])
             {
                 group.groupName = EditorGUILayout.TextField("名称", group.groupName);
+                group.chunkSize = EditorGUILayout.Vector2Field("区块大小（米）", group.chunkSize);
+                group.visibleDistance = EditorGUILayout.FloatField("可见距离（米，负=无限）", group.visibleDistance);
                 group.maxFailedAttempts = Mathf.Max(0,
                     EditorGUILayout.IntField("失败尝试次数上限", group.maxFailedAttempts));
                 group.expectedDensity = Mathf.Max(0f,
@@ -1971,6 +1986,7 @@ namespace AiTerrainWorkflow.LayerEditor
             if (index < _propFoldouts.Count) _propFoldouts.RemoveAt(index);
             EditorUtility.SetDirty(_project);
             if (!string.IsNullOrEmpty(assetPath)) AssetDatabase.DeleteAsset(assetPath);
+            _project.DeletePlacementCacheFile(PlacementCache.PropFileName(index));
             AssetDatabase.SaveAssets();
         }
 
@@ -2059,6 +2075,8 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 group.markerColor = EditorGUILayout.ColorField("标识颜色", group.markerColor);
                 group.prefab = DrawProcessedCandidatePrefabField("预制体", group.prefab);
+                group.chunkSize = EditorGUILayout.Vector2Field("区块大小（米）", group.chunkSize);
+                group.visibleDistance = EditorGUILayout.FloatField("可见距离（米，负=无限）", group.visibleDistance);
                 group.rotationDegrees = Mathf.Clamp(
                     EditorGUILayout.FloatField("旋转（度）", group.rotationDegrees), 0f, 360f);
                 group.scale = Mathf.Max(0f, EditorGUILayout.FloatField("缩放", group.scale));
@@ -2107,6 +2125,7 @@ namespace AiTerrainWorkflow.LayerEditor
             if (index < _fixedPointFoldouts.Count) _fixedPointFoldouts.RemoveAt(index);
             EditorUtility.SetDirty(_project);
             if (!string.IsNullOrEmpty(assetPath)) AssetDatabase.DeleteAsset(assetPath);
+            _project.DeletePlacementCacheFile(PlacementCache.FixedFileName(index));
             AssetDatabase.SaveAssets();
         }
 

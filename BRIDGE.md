@@ -28,9 +28,10 @@ python python\workflow_bridge.py run python\manifest.example.json
 
 ```powershell
 python python\workflow_bridge.py configure config.json --project Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/Demo/Demo.asset
+python python\workflow_bridge.py export current-config.json --project Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/Demo/Demo.asset
 ```
 
-Python CLI 刻意只提供 `configure` 和 `run` 两个入口。命令行侧不提供单字段 set/add/remove 命令；要修改任何工作流配置，必须编辑完整 JSON 后重新导入。这样 JSON 是可审查、可复现的唯一外部配置来源，不会出现一长串参数命令或部分更新语义。
+Python CLI 提供 `configure`、`run` 和只读的 `export`。命令行侧不提供单字段 set/add/remove 命令；要修改任何工作流配置，必须编辑完整 JSON 后重新导入。这样 JSON 是可审查、可复现的唯一外部配置来源，不会出现一长串参数命令或部分更新语义。
 
 Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备用 Prefab 会强制根节点 position/rotation/scale 为 `(0,0,0)`、`(0,0,0)`、`(1,1,1)`。
 
@@ -39,6 +40,7 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 | 命令 | 主要参数 | 用途 |
 |---|---|---|
 | `workflow.configure` | `path`, `message` | 用完整 manifest 创建或整体覆盖配置（唯一配置写命令） |
+| `workflow.export` | `path` | 读取当前项目，返回完整 manifest JSON |
 | `workflow.prefab.build` | `path`, `type`, `placed` | 构建单个备用 Prefab |
 | `workflow.prefab.update_bounds` | `active` | 批量更新 Bounds；`active=true` 强制 |
 | `workflow.prefab.update_billboards` | 无 | 批量刷新启用的 Billboard |
@@ -46,21 +48,28 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 | `workflow.validate` | `path` | 执行应用前校验 |
 | `workflow.build` | `path`, `terrain`, `type` | 构建到场景 Terrain |
 | `workflow.run` | `path`, `message` | 完整 manifest 流程 |
+| `workflow.object.instantiate` | `path`, `target`, `name`, `position/rotation/scale` | 在场景中实例化 Prefab；`path`=Prefab 资产路径，`target`=父物体路径/名称（可空=场景根） |
+| `workflow.object.destroy` | `target` | 销毁场景中的 GameObject（支持 Undo） |
+| `workflow.prefab.edit` | `path`, `target`, `position/rotation/scale/move/rotate/zoom/quaternion` | 编辑 Prefab 资产内部物体 Transform（直接保存资产；`target` 可空=根节点） |
+| `workflow.prefab.remove` | `path`, `target` | 从 Prefab 资产内部删除物体（直接保存资产） |
+| `workflow.prefab.instantiate` | `path`, `output`, `target`, `position/rotation/scale` | 在 Prefab 资产内部实例化另一个 Prefab 为子物体（直接保存资产） |
 
 其余原生命令只处理生成资产、派生数据、校验或执行构建，不用于修改工作流配置。Python CLI 只暴露 `workflow.configure` 与 `workflow.run`；完整结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。
 
 ## Manifest
 
-`python/manifest.example.json` 是完整模板，不是只展示常用字段的片段。C# 会拒绝缺少必需顶层集合或不是完整 16 层的 manifest，防止遗漏字段时把默认值误当成用户配置。模板覆盖：
+`python/manifest.example.json` 是完整模板，不是只展示常用字段的片段。C# 会拒绝缺少必需顶层集合或不是完整层数的 manifest，防止遗漏字段时把默认值误当成用户配置。模板覆盖：
 
-- `projectName`、`resolution`、`projectPath`：项目创建或定位。
-- 高度噪声、平滑参数，以及 `paintConfig` 中的道路随机游走、混合噪声和世界/像素预览比例。
-- `naturalTerrainLayers`、`roadTerrainLayers`、完整 16 个 `layers`（含道路重映射曲线）、`adjacencyGroups`。
-- `scatterGroups`、`propGroups`、`fixedGroups`：三个摆放模块的全部当前字段。
-- `prefabs`：需要先处理的源 Prefab 及 Billboard/两点适高选项。
+- `projectName`、`resolution`、`projectPath`：项目创建或定位。新建配置默认创建 3 层（Layer0 透明 + 2 个语义层），层数在 2~16 之间可增删。
+- 高度噪声、平滑参数，以及 `paintConfig` 中的道路随机游走、混合噪声、`textureSmoothingRadius`（最终 alphamap 五点平滑半径，单位为 alphamap 像素）和世界/像素预览比例。
+- `naturalTerrainLayers`、`roadTerrainLayers`、完整 `layers`（含道路重映射曲线）、`adjacencyGroups`。
+- `scatterGroups`、`propGroups`、`fixedGroups`：三个摆放模块的全部当前字段，每个生成组含 `chunkSize`（米）与 `visibleDistance`（米，负数=无限模式全量显示）。**`fixedGroups` 的 `positions` 不写入 JSON**：导出时只输出摘要 `positionCount`（定点条数）、`nonZeroCount`（非 0 值数量）与 `positionsPath`（定点位置所在的资产路径）；导入时 `positions` 为空且 `positionsPath` 指向现存资产时，从该资产复制位置。
+- `prefabs`：需要先处理的源 Prefab 及 Billboard/两点适高选项，可选 `lodTransition`（0~1，LOD0→LOD1 的屏幕相对高度切换阈值，默认 0.1；仅作为处理参数，不写入任何工作流配置）。
 - `areaOperations`：`Line`（两点+半径）、`Rectangle`（两点）、`Triangle`（三点）的有序操作列表；坐标为 LayerMap 像素。
 - `bake`：是否重建全部派生图；否则只重建 LayerMap。
 - `terrain`、`applyThrough`：目标 Terrain 名称与最终应用阶段；`terrain` 可留空以自动寻找。
+
+`export` 完整导出当前配置、生成组和绘画操作，**唯一例外是 `fixedGroups` 的位置列表**——为避免大量位置数据写入 JSON，定点位置只导出摘要（`positionCount` / `nonZeroCount` / `positionsPath`），导入时从 `positionsPath` 指向的现存资产恢复。`export` 的 `prefabs` 固定为 `[]`：备用 Prefab 允许被用户修改、拼合，因而不反推已经失真的源 Prefab；生成组对 `Generated/Prefabs` 的实际引用会完整导出，导出的 JSON 可直接再 `configure` 或 `run`。
 
 距离约定：只有区域绘画坐标和半径使用像素；高度、道路宽度、散布间距、摆件间距等配置均按世界米解释。构建时由 Terrain 尺寸与 MapData 分辨率换算世界米/像素。
 
