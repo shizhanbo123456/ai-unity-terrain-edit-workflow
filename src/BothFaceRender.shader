@@ -31,6 +31,7 @@ Shader "Custom/BothFaceRender"
         struct Input
         {
             float2 uv_MainTex;
+            float facing : VFACE;
         };
 
         half _Glossiness;
@@ -50,6 +51,7 @@ Shader "Custom/BothFaceRender"
             fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
             clip(c.a - 0.001);
             o.Albedo = c.rgb;
+            o.Normal = fixed3(0, 0, IN.facing >= 0 ? 1 : -1);
             // Metallic and smoothness come from slider variables
             o.Metallic = _Metallic;
             o.Smoothness = _Glossiness;
