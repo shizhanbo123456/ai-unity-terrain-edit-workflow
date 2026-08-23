@@ -71,6 +71,8 @@ namespace AiTerrainWorkflow.LayerEditor
         private readonly List<bool> _scatterFoldouts = new List<bool>();
         private Vector2 _propScroll;
         private readonly List<bool> _propFoldouts = new List<bool>();
+        private Vector2 _fixedPointScroll;
+        private readonly List<bool> _fixedPointFoldouts = new List<bool>();
 
         // 区域编辑子界面状态
         private Tool _tool = Tool.CircleBrush;
@@ -192,7 +194,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
             if (_mainTab == MainTab.FixedPointEdit)
             {
-                DrawPlannedEditView();
+                DrawFixedPointEditView();
                 return;
             }
 
@@ -326,6 +328,7 @@ namespace AiTerrainWorkflow.LayerEditor
             Directory.CreateDirectory(dirFull);
             Directory.CreateDirectory(Path.Combine(dirFull, "ScatterConfig"));
             Directory.CreateDirectory(Path.Combine(dirFull, "PropConfig"));
+            Directory.CreateDirectory(Path.Combine(dirFull, "FixedPointConfig"));
 
             var project = ScriptableObject.CreateInstance<TerrainPaintProjectSO>();
             project.name = name;
@@ -1751,10 +1754,140 @@ namespace AiTerrainWorkflow.LayerEditor
             AssetDatabase.SaveAssets();
         }
 
-        private void DrawPlannedEditView()
+        private void DrawFixedPointEditView()
         {
-            EditorGUILayout.LabelField("定点编辑", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("定点编辑子界面已建立，具体配置与编辑功能将在后续实现。", MessageType.Info);
+            EditorGUILayout.BeginHorizontal();
+
+            EditorGUILayout.BeginVertical(GUILayout.Width(position.width * 0.5f));
+            EditorGUILayout.LabelField("Layer 图（只读）", EditorStyles.boldLabel);
+            EnsurePaintMap();
+            if (_map != null)
+            {
+                float size = Mathf.Max(120f, Mathf.Min(position.width * 0.48f, position.height - 90f));
+                Rect mapRect = GUILayoutUtility.GetRect(size, size, GUILayout.Width(size), GUILayout.Height(size));
+                GUI.DrawTexture(mapRect, _map.Texture, ScaleMode.ScaleToFit, true);
+                DrawFixedPointMarkers(mapRect);
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.BeginVertical();
+            _fixedPointScroll = EditorGUILayout.BeginScrollView(_fixedPointScroll);
+            EditorGUILayout.LabelField("定点生成组", EditorStyles.boldLabel);
+            EnsureFixedPointFoldouts();
+            for (int i = 0; i < _project.fixedPointGroups.Count; i++)
+            {
+                var group = _project.fixedPointGroups[i];
+                if (group == null) continue;
+                DrawFixedPointGroup(i, group);
+            }
+            if (GUILayout.Button("+ 添加定点生成组", GUILayout.Height(26f))) CreateFixedPointGroup();
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.EndHorizontal();
+            EditorUtility.SetDirty(_project);
+        }
+
+        private void DrawFixedPointMarkers(Rect mapRect)
+        {
+            Handles.BeginGUI();
+            foreach (var group in _project.fixedPointGroups)
+            {
+                if (group == null) continue;
+                Color marker = group.markerColor;
+                marker.a = 1f;
+                foreach (var position01 in group.positions)
+                {
+                    float x = mapRect.x + Mathf.Clamp01(position01.x) * mapRect.width;
+                    float y = mapRect.yMax - Mathf.Clamp01(position01.y) * mapRect.height;
+                    var center = new Vector3(x, y, 0f);
+                    Handles.color = Color.black;
+                    Handles.DrawSolidDisc(center, Vector3.forward, 7f);
+                    Handles.color = marker;
+                    Handles.DrawSolidDisc(center, Vector3.forward, 5f);
+                }
+            }
+            Handles.color = Color.white;
+            Handles.EndGUI();
+        }
+
+        private void EnsureFixedPointFoldouts()
+        {
+            while (_fixedPointFoldouts.Count < _project.fixedPointGroups.Count) _fixedPointFoldouts.Add(true);
+            if (_fixedPointFoldouts.Count > _project.fixedPointGroups.Count)
+                _fixedPointFoldouts.RemoveRange(_project.fixedPointGroups.Count,
+                    _fixedPointFoldouts.Count - _project.fixedPointGroups.Count);
+        }
+
+        private void DrawFixedPointGroup(int index, FixedPointConfigSO group)
+        {
+            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginHorizontal();
+            _fixedPointFoldouts[index] = EditorGUILayout.Foldout(
+                _fixedPointFoldouts[index], $"生成组 {index}", true);
+            if (GUILayout.Button("删除", GUILayout.Width(56f)))
+            {
+                DeleteFixedPointGroup(index, group);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (_fixedPointFoldouts[index])
+            {
+                group.markerColor = EditorGUILayout.ColorField("标识颜色", group.markerColor);
+                group.prefab = (GameObject)EditorGUILayout.ObjectField(
+                    "预制体", group.prefab, typeof(GameObject), false);
+                group.rotationDegrees = Mathf.Clamp(
+                    EditorGUILayout.FloatField("旋转（度）", group.rotationDegrees), 0f, 360f);
+                group.scale = Mathf.Max(0f, EditorGUILayout.FloatField("缩放", group.scale));
+
+                EditorGUILayout.Space(4);
+                EditorGUILayout.LabelField("位置列表（归一化 X/Y）", EditorStyles.boldLabel);
+                for (int i = 0; i < group.positions.Count; i++)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    Vector2 value = EditorGUILayout.Vector2Field($"位置[{i}]", group.positions[i]);
+                    value.x = Mathf.Clamp01(value.x);
+                    value.y = Mathf.Clamp01(value.y);
+                    group.positions[i] = value;
+                    if (GUILayout.Button("-", GUILayout.Width(22f))) group.positions.RemoveAt(i--);
+                    EditorGUILayout.EndHorizontal();
+                }
+                if (GUILayout.Button("+ 添加位置")) group.positions.Add(new Vector2(0.5f, 0.5f));
+                EditorUtility.SetDirty(group);
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        private void CreateFixedPointGroup()
+        {
+            string projectPath = AssetDatabase.GetAssetPath(_project);
+            string projectDir = Path.GetDirectoryName(projectPath)?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(projectDir)) return;
+            string folder = projectDir + "/FixedPointConfig";
+            if (!AssetDatabase.IsValidFolder(folder)) AssetDatabase.CreateFolder(projectDir, "FixedPointConfig");
+
+            var group = CreateInstance<FixedPointConfigSO>();
+            string assetPath = AssetDatabase.GenerateUniqueAssetPath(folder + "/FixedPointGroup.asset");
+            AssetDatabase.CreateAsset(group, assetPath);
+            _project.fixedPointGroups.Add(group);
+            _fixedPointFoldouts.Add(true);
+            EditorUtility.SetDirty(_project);
+            AssetDatabase.SaveAssets();
+        }
+
+        private void DeleteFixedPointGroup(int index, FixedPointConfigSO group)
+        {
+            if (!EditorUtility.DisplayDialog("删除定点生成组", $"确定删除生成组 {index} 及其配置资产？", "删除", "取消"))
+                return;
+            string assetPath = AssetDatabase.GetAssetPath(group);
+            _project.fixedPointGroups.RemoveAt(index);
+            if (index < _fixedPointFoldouts.Count) _fixedPointFoldouts.RemoveAt(index);
+            EditorUtility.SetDirty(_project);
+            if (!string.IsNullOrEmpty(assetPath)) AssetDatabase.DeleteAsset(assetPath);
+            AssetDatabase.SaveAssets();
         }
 
         /// <summary>保持折叠状态列表长度与 Layer 数量一致（截断或补 false）。</summary>

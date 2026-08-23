@@ -132,6 +132,12 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("摆件生成组；资产存放在当前项目配置目录的 PropConfig 子目录")]
         public List<PropConfigSO> propGroups = new List<PropConfigSO>();
 
+        // ---------- 定点编辑 ----------
+
+        [Header("定点编辑")]
+        [Tooltip("定点生成组；资产存放在当前项目配置目录的 FixedPointConfig 子目录")]
+        public List<FixedPointConfigSO> fixedPointGroups = new List<FixedPointConfigSO>();
+
         // ---------- 旧树木/细节配置（兼容已有资产，不再由新散布工作流使用） ----------
 
         [HideInInspector]
