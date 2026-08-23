@@ -1,0 +1,30 @@
+{
+  "projectName": "CommandLineTerrain",
+  "resolution": 512,
+  "heightSeed": 42,
+  "heightScale": 0.02,
+  "naturalSeed": 101,
+  "roadSeed": 202,
+  "scatterSeed": 303,
+  "propSeed": 404,
+  "previewWorldPerPixel": 0.4,
+  "naturalTerrainLayers": ["Assets/TerrainLayers/Grass.terrainlayer"],
+  "roadTerrainLayers": ["Assets/TerrainLayers/Dirt.terrainlayer"],
+  "layers": [
+    {"index": 1, "name": "Grass", "heightRange": [2, 12], "generateRoad": true,
+     "roadWidth": 2, "roadSpacingMin": 4, "naturalWeights": [10], "roadWeights": [10]}
+  ],
+  "adjacencyGroups": [{"values": [1]}],
+  "prefabs": [
+    {"path": "Assets/Tree.prefab", "billboardMode": "CrossPlanes", "twoPointHeightAdaptation": false}
+  ],
+  "areaOperations": [
+    {"type": "Rectangle", "a": [16, 16], "b": [495, 495], "layerIndex": 1}
+  ],
+  "scatterGroups": [],
+  "propGroups": [],
+  "fixedGroups": [],
+  "bake": true,
+  "terrain": "Terrain",
+  "applyThrough": "FixedPointEdit"
+}
