@@ -22,7 +22,7 @@ namespace AiTerrainWorkflow
         /// 将 false 位置作为距离 0 的起点，逐层遍历所有 true 位置并返回距离。
         /// 开启 boundaryAsZeroDistance 时，相当于数组边界外存在距离 0 的区域，
         /// 因而最外圈 true 位置的距离为 1；最外圈 false 位置仍为 0。
-        /// 若关闭边界源且输入中没有 false，所有 true 位置返回 int.MaxValue，表示不可达。
+        /// 若关闭边界源且输入中没有 false，会输出错误日志并返回全 0 数组。
         /// </summary>
         public static int[][] Generate(bool[][] mask, bool boundaryAsZeroDistance = false)
         {
@@ -49,6 +49,15 @@ namespace AiTerrainWorkflow
 
             if (boundaryAsZeroDistance)
                 EnqueueBoundary(mask, result, width, height, queue);
+
+            if (queue.Count == 0)
+            {
+                UnityEngine.Debug.LogError(
+                    "[DistanceFieldGenerator] 输入中没有 false，且未启用边界距离源，无法生成距离场，已返回全 0 数组。");
+                for (int y = 0; y < height; y++)
+                    Array.Clear(result[y], 0, width);
+                return result;
+            }
 
             int[] dx = { -1, 1, 0, 0 };
             int[] dy = { 0, 0, -1, 1 };
