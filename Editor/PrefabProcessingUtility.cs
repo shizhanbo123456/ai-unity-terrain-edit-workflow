@@ -4,6 +4,8 @@ using System.IO;
 using AiTerrainWorkflow.LayerEditor;
 using UnityEditor;
 using UnityEngine;
+using UnityPythonBridge;
+using UnityPythonBridge.Commands;
 
 namespace AiTerrainWorkflow.Editor
 {
@@ -11,6 +13,8 @@ namespace AiTerrainWorkflow.Editor
     public static class PrefabProcessingUtility
     {
         public const string WorkflowRoot = "Assets/ai-unity-terrain-edit-workflow";
+        public const string BillboardOutputDirectory =
+            "Assets/ai-unity-terrain-edit-workflow/Billboards";
 
         /// <summary>
         /// 在工作流根目录创建同名包装 Prefab：空根节点 + 原 Prefab 的嵌套实例，
@@ -75,6 +79,128 @@ namespace AiTerrainWorkflow.Editor
                 twoPointHeightAdaptation);
 
             return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
+        }
+
+        /// <summary>
+        /// 遍历工作流目录下所有挂有 PrefabStructureInfo 的候选 Prefab，
+        /// 为 generateBillboard=true 的对象从 (0,0,1) 方向生成正交 Billboard。
+        /// </summary>
+        /// <returns>成功更新的 Billboard 数量。</returns>
+        public static int UpdateAllBillboards()
+        {
+            int updated = 0;
+            foreach (string prefabPath in FindCandidatePrefabPaths())
+            {
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                var info = prefab != null ? prefab.GetComponent<PrefabStructureInfo>() : null;
+                if (info == null || !info.generateBillboard)
+                    continue;
+
+                try
+                {
+                    PrefabBillboardCommand.Billboard(
+                        new BridgeContext(),
+                        new BridgeArgs
+                        {
+                            path = prefabPath,
+                            output = BillboardOutputDirectory,
+                            cameraPosition = new[] { 0f, 0f, 1f },
+                            pixelsPerMeter = 100f,
+                        });
+                    updated++;
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogError($"[PrefabProcessingUtility] Billboard 更新失败: {prefabPath}\n{exception}");
+                }
+            }
+
+            if (updated > 0)
+                AssetDatabase.Refresh();
+            return updated;
+        }
+
+        /// <summary>
+        /// 批量计算候选 Prefab 的完整变换 AABB，并写入 PrefabStructureInfo 的 XYZ 范围。
+        /// 非强制刷新时，只处理三个范围均为 (0,0) 的 Prefab。
+        /// </summary>
+        /// <param name="forceRefresh">true=全部重算；false=已有任一非零 Bounds 的对象跳过。</param>
+        /// <returns>成功更新的 Prefab 数量。</returns>
+        public static int UpdateAllBounds(bool forceRefresh)
+        {
+            int updated = 0;
+            foreach (string prefabPath in FindCandidatePrefabPaths())
+            {
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                var info = prefab != null ? prefab.GetComponent<PrefabStructureInfo>() : null;
+                if (info == null)
+                    continue;
+                if (!forceRefresh && !BoundsAreAllZero(info))
+                    continue;
+
+                try
+                {
+                    var result = PrefabBillboardCommand.Bounds(
+                        new BridgeContext(),
+                        new BridgeArgs { path = prefabPath }) as PrefabBoundsResult;
+                    if (result == null)
+                        throw new InvalidOperationException("prefab.bounds 未返回 PrefabBoundsResult");
+
+                    WriteBounds(prefabPath, result);
+                    updated++;
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogError($"[PrefabProcessingUtility] Bounds 更新失败: {prefabPath}\n{exception}");
+                }
+            }
+
+            if (updated > 0)
+                AssetDatabase.SaveAssets();
+            return updated;
+        }
+
+        private static string[] FindCandidatePrefabPaths()
+        {
+            string[] guids = AssetDatabase.FindAssets("t:Prefab", new[] { WorkflowRoot });
+            var paths = new System.Collections.Generic.List<string>(guids.Length);
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab != null && prefab.GetComponent<PrefabStructureInfo>() != null)
+                    paths.Add(path);
+            }
+            return paths.ToArray();
+        }
+
+        private static bool BoundsAreAllZero(PrefabStructureInfo info)
+        {
+            return info.boundsX == Vector2.zero &&
+                   info.boundsY == Vector2.zero &&
+                   info.boundsZ == Vector2.zero;
+        }
+
+        private static void WriteBounds(string prefabPath, PrefabBoundsResult bounds)
+        {
+            GameObject contentsRoot = null;
+            try
+            {
+                contentsRoot = PrefabUtility.LoadPrefabContents(prefabPath);
+                var info = contentsRoot.GetComponent<PrefabStructureInfo>();
+                if (info == null)
+                    throw new InvalidOperationException("候选 Prefab 根节点缺少 PrefabStructureInfo");
+
+                info.boundsX = new Vector2(bounds.min.x, bounds.max.x);
+                info.boundsY = new Vector2(bounds.min.y, bounds.max.y);
+                info.boundsZ = new Vector2(bounds.min.z, bounds.max.z);
+                PrefabUtility.SaveAsPrefabAsset(contentsRoot, prefabPath);
+            }
+            finally
+            {
+                if (contentsRoot != null)
+                    PrefabUtility.UnloadPrefabContents(contentsRoot);
+            }
         }
     }
 }

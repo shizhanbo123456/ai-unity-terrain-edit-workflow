@@ -505,7 +505,7 @@ LayerEditor/
 
 Editor/
 ├── TerrainEditWorkflowMenu.cs  [已完成] 菜单入口（Tools / Terrain Edit Workflow）
-└── PrefabProcessingUtility.cs  [已完成] 构建同名候选包装 Prefab，并写入 PrefabStructureInfo
+└── PrefabProcessingUtility.cs  [已完成] 构建候选包装 Prefab；批量更新 Billboard 与完整变换 Bounds
 
 ModelFeatures.md                [已完成] 模型特征记录（尺寸统一用 bridge `mesh-bounds --placed` 量取）
 ```

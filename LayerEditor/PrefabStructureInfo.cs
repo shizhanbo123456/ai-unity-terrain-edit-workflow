@@ -20,6 +20,15 @@ namespace AiTerrainWorkflow.LayerEditor
         [Tooltip("是否使用两点高度适应；具体语义和算法后续接入")]
         public bool twoPointHeightAdaptation;
 
+        [Tooltip("Prefab 世界 AABB 在 X 轴上的范围（min/max）")]
+        public Vector2 boundsX;
+
+        [Tooltip("Prefab 世界 AABB 在 Y 轴上的范围（min/max）")]
+        public Vector2 boundsY;
+
+        [Tooltip("Prefab 世界 AABB 在 Z 轴上的范围（min/max）")]
+        public Vector2 boundsZ;
+
 #if UNITY_EDITOR
         /// <summary>
         /// 为目标 Prefab 新增或更新结构信息，并强制归一化其根 Transform。
