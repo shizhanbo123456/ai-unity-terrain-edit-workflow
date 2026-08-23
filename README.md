@@ -27,6 +27,314 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 | 生成组 | `GenerationGroup`：主配置中的一组摆件生成规则（失败尝试次数上限 / 预期密度 / 生成规模(Vector2Int) / 目标layer(FLAGS) / 越界宽容(float) / 排列依据-距离场 / 排列位置-值域 / 旋转 enum / 分布形式 enum / 分布间距 float(可<0)；组内每个 prefab 另有 权重 + 数量下限），对应一类物件的摆放规则（见阶段 4）。**不采用坡度限制**；**防重叠（最小间距）延至构建期按实际地形尺寸处理**。 |
 | 物体库 | 统一存放所有可用场景物体的文件夹；**通常**每个物体一个单物体预制体（根节点零变换）+ `PropInfo` 信息组件（尺寸/类别/朝向约束等）。**特例**允许多个子物体拼成一个 prefab（如水晶 + 底座拼成防御塔），但**根节点必须始终为零变换**（位置 0 / 旋转默认 / 缩放 1）——放置时只操作根节点，无需任何换算。 |
 
+## 完整生成逻辑伪代码
+
+> 本节是所有阶段的目标调用链。编辑器窗口和 Player 必须调用同一套运行时生成函数；两者只有 MapData 保存策略不同。伪代码中标注为「待实现」的部分是已确定调用边界、但当前 `TerrainBuilder` 尚未填充的实现。
+
+### 1. 公共入口与 MapData 生命周期
+
+```text
+function CreateGenerationSession(project, terrain, environment):
+    require project != null
+    require terrain != null
+
+    session.project = project
+    session.terrain = terrain
+    session.mapData = TerrainMapData.Load(project.mapDataFiles)
+    session.persistMapData = (environment == UnityEditor && not Playing)
+    return session
+
+function StoreMapData(session, key, value):
+    // 两种环境都先写本次生成会话，供后续阶段立即使用
+    session.mapData.Set(key, value)
+
+    if session.persistMapData:
+        // 仅编辑器非游玩状态持久化
+        project.WriteMap(key, value)
+        project.RefreshMapDataRefs()
+    else:
+        // Player 或 Play Mode：不写磁盘，不修改 ScriptableObject
+        do nothing
+
+function EnsureMapData(session, key, calculate):
+    if session.mapData.Contains(key):
+        return session.mapData.Get(key)
+    value = calculate()
+    StoreMapData(session, key, value)
+    return value
+
+function Build(project, terrain, applyThrough):
+    session = CreateGenerationSession(project, terrain, CurrentEnvironment)
+
+    ApplyHeight(session)
+    if applyThrough < TextureEdit:    return
+
+    ApplyTexture(session)
+    if applyThrough < ScatterEdit:    return
+
+    ApplyScatter(session)
+    if applyThrough < PropEdit:       return
+
+    ApplyProps(session)
+    if applyThrough < FixedPointEdit: return
+
+    ApplyFixedPoints(session)
+```
+
+阶段必须从前向后执行。如果高度阶段未执行，贴图及后续阶段也不得执行。
+
+### 2. 区域图与通用坐标
+
+```text
+function EnsureLayerMap(session):
+    layerMap = session.mapData.Get("layerMap")
+    if layerMap == null:
+        error "缺少 layerMap"
+        abort build
+    validate layerMap is rectangular and matches project.mapResolution
+    return layerMap
+
+function PixelToTerrainLocal(px, py, mapWidth, mapHeight, terrainSize):
+    localX = px / (mapWidth  - 1) * terrainSize.x
+    localZ = py / (mapHeight - 1) * terrainSize.z
+    return (localX, localZ)
+
+function NormalizedToTerrainWorld(uv, terrain):
+    localX = clamp01(uv.x) * terrain.size.x
+    localZ = clamp01(uv.y) * terrain.size.z
+    worldXZ = terrain.position.xz + (localX, localZ)
+    worldY = terrain.position.y + terrain.SampleHeight(worldXZ)
+    return (worldXZ.x, worldY, worldXZ.y)
+```
+
+首末像素的**中心**分别对齐 Terrain 局部坐标 `0` 与 `size`；因此像素实际覆盖在边界外额外延伸半个像素间距。
+
+### 3. 高度生成与应用（`ApplyHeight`，应用待实现）
+
+```text
+function CalculateHeightMap(project, layerMap):
+    for each pixel p:
+        layerIndex = round(layerMap[p])
+        layer = project.layers[layerIndex]
+        noise = DeterministicNoise(p, project.heightSeed, project.heightScale)
+        height[p] = lerp(layer.heightRange.x, layer.heightRange.y, noise)
+
+    if project.smoothIterations > 0:
+        repeat according to configured smoothing rule:
+            for each p:
+                samples = center p
+                for k in 1..smoothIterations:
+                    samples += p ± (k * smoothStep, 0)
+                    samples += p ± (0, k * smoothStep)
+                discard out-of-map samples
+                smoothed[p] = average(samples)
+        height = smoothed
+    return height
+
+function ApplyHeight(session):
+    layerMap = EnsureLayerMap(session)
+    height = EnsureMapData(session, "height",
+        () => CalculateHeightMap(project, layerMap))
+
+    minHeight, maxHeight = FindRange(height)
+    normalized = ResizeAndSampleBilinear(
+        height, terrain.terrainData.heightmapResolution,
+        value => InverseLerp(minHeight, maxHeight, value))
+    terrain.terrainData.SetHeights(normalized)
+```
+
+### 4. 距离场、路网与地形贴图（`ApplyTexture`，Terrain 权重应用待实现）
+
+```text
+function CalculateRoadMapData(project, layerMap):
+    layerIds = FlattenAndRoundToInt(layerMap)
+    validate no layer appears in multiple adjacencyGroups
+    groups = TerrainRoadGen.GroupLayers(project)
+
+    distance  = zeros(mapSize)
+    occupancy = zeros(mapSize)
+    road      = zeros(mapSize)
+
+    for each group in groups:
+        groupDistance = TerrainRoadGen.ComputeR(layerIds, group)
+        TerrainRoadGen.GenerateRoads(
+            layerIds, groupDistance, group,
+            project.config, project.layers,
+            output groupOccupancy, output groupRoad)
+        merge groupDistance into distance
+        merge groupOccupancy into occupancy
+        merge groupRoad into road
+
+    offRoad = TerrainRoadGen.ComputeOffRoad(
+        layerIds, road, project.config.worldPerPixel)
+    return distance, occupancy, road, offRoad
+
+function EnsureRoadMapData(session):
+    if any of distance/occupancy/road/offRoad is missing:
+        all = CalculateRoadMapData(project, EnsureLayerMap(session))
+        // 四项必须作为同一次计算的一致结果整体更新
+        StoreMapData(session, "distance",  all.distance)
+        StoreMapData(session, "occupancy", all.occupancy)
+        StoreMapData(session, "road",      all.road)
+        StoreMapData(session, "offRoad",   all.offRoad)
+
+function ApplyTexture(session):
+    EnsureRoadMapData(session)
+    layerMap = session.mapData.Get("layerMap")
+    road = session.mapData.Get("road")
+    distance = session.mapData.Get("distance")
+
+    terrainLayers = StableUnion(
+        project.naturalTerrainLayers,
+        project.roadTerrainLayers)
+    terrain.terrainData.terrainLayers = terrainLayers
+
+    for each alphamap sample p:
+        layerIndex = SampleNearest(layerMap, p)
+        isRoad = SampleNearest(road, p) > 0.5
+        sourceWeights = isRoad
+            ? project.layers[layerIndex].roadLayerWeights
+            : project.layers[layerIndex].naturalLayerWeights
+
+        for each terrainLayer i:
+            weight[i] = sourceWeights[i]
+            weight[i] *= DeterministicTextureNoise(p, i, naturalSeed/roadSeed)
+            // 边界混合若启用，在此处按 distance 调整
+        NormalizeWeightsOrUseFallback(weight)
+        alphamap[p] = weight
+
+    terrain.terrainData.SetAlphamaps(alphamap)
+```
+
+### 5. 散布生成与流式更新（`ApplyScatter`，部分已实现）
+
+```text
+function ApplyScatter(session):
+    EnsureRoadMapData(session)
+    for each scatterGroup with index groupIndex:
+        runtime.seed = project.scatterSeed XOR Hash(groupIndex)
+        runtime.chunks = ChunkUpdateManager(group.chunkSize, group.visibleDistance)
+        runtime.prefabPools = CreatePools(group.prefabs where prefab != null and weight > 0)
+        register runtime
+
+function SetCameraPosition(worldXZ):
+    localXZ = worldXZ - terrain.position.xz
+    for each scatter runtime:
+        activeChunks, inactiveChunks = runtime.chunks.MoveTo(localXZ)
+        for each inactive chunk:
+            release every instance to its prefab pool
+        for each newly active chunk:
+            GenerateScatterChunk(runtime, chunk)
+
+function GenerateScatterChunk(runtime, chunk):
+    candidatePixels = all pixels whose centers fall inside chunk bounds
+    filter candidatePixels where:
+        group.targetLayers contains layerMap[p]
+        road[p] <= 0.5
+        group.offRoadDistanceRange contains offRoad[p]
+
+    rng = Random(runtime.seed XOR Hash(chunk.index))
+    count = floor(validWorldArea * group.density)
+    selected = Shuffle(candidatePixels, rng).Take(count)
+
+    for each p in selected:
+        prefab = WeightedPick(group.prefabs, rng)
+        instance = prefabPool.Get(prefab)
+        instance.position = PixelToTerrainWorld(p)
+        instance.scale = uniform(
+            group.randomScale.min, group.randomScale.max, rng)
+```
+
+### 6. 摆件生成（`ApplyProps`，待实现）
+
+```text
+function ApplyProps(session):
+    EnsureRoadMapData(session)
+    height = EnsureMapData(session, "height", CalculateHeightMap)
+
+    for each propGroup with index groupIndex:
+        rng = Random(project.propSeed XOR Hash(groupIndex))
+        basisMap = choose by group.arrangementBasis:
+            Distance -> distance
+            OffRoad  -> offRoad
+            Height   -> height
+
+        candidates = pixels where:
+            group.targetLayers contains layerMap[p]
+            group.arrangementRange contains basisMap[p]
+
+        targetCount = floor(WorldArea(candidates) * group.expectedDensity)
+        placed = []
+        failedAttempts = 0
+
+        // 先满足每个 prefab 的 minimumCount，再按 weight 随机选取
+        prefabSchedule = BuildWeightedScheduleWithMinimums(group.prefabs, targetCount, rng)
+
+        while placed.count < targetCount and failedAttempts < group.maxFailedAttempts:
+            batchCandidates = GenerateBatchCandidates(
+                candidates, group.batchSize.y,
+                group.distributionMode, rng)
+
+            accepted = []
+            for each candidate in batchCandidates:
+                footprint = ReadPrefabFootprint(candidate.prefab)
+                insideRatio = CalculateInsideTargetRatio(footprint, candidate.pose)
+                if 1 - insideRatio > group.outOfBoundsTolerance: continue
+
+                // Distance - R1 - R2 > spacing；spacing < 0 时允许互相重叠
+                if not SatisfySpacing(candidate, placed, accepted,
+                    group.distributionSpacing): continue
+                accepted.Add(candidate)
+
+            if accepted.count < group.batchSize.x:
+                failedAttempts += 1
+                continue
+
+            for each candidate in accepted:
+                candidate.rotation = choose by group.rotationMode:
+                    TowardHighGradient -> direction of +Gradient(basisMap)
+                    TowardLowGradient  -> direction of -Gradient(basisMap)
+                    AlongContour      -> perpendicular to Gradient(basisMap)
+                    Random            -> uniform 0..360 degrees
+                Instantiate candidate.prefab at PixelToTerrainWorld(candidate.pixel)
+                placed.Add(candidate)
+            failedAttempts = 0
+```
+
+`distributionMode` 的候选点规则：`Scatter` 在有效区域独立取点；`Cluster` 以一个中心向周围聚簇；`Extend` 沿已接受物体的局部方向延伸。
+
+### 7. 定点生成（`ApplyFixedPoints`，待实现）
+
+```text
+function ApplyFixedPoints(session):
+    for each fixedPointGroup:
+        if group.prefab == null: continue
+        for each uv in group.positions:
+            position = NormalizedToTerrainWorld(uv, terrain)
+            instance = Instantiate(group.prefab)
+            instance.position = position
+            instance.rotation = Euler(0, group.rotationDegrees, 0)
+            instance.scale = Vector3.one * group.scale
+```
+
+### 8. 编辑器窗口的职责
+
+```text
+function EditorWindow.CalculateOrApply():
+    edit ScriptableObject configurations
+    call the same runtime calculation/build functions shown above
+    persist returned MapData through the editor storage adapter
+    draw previews from MapData
+    never implement an independent terrain generation algorithm
+
+function WorkflowConfig.DrawMapDataPreview():
+    for each persisted MapData entry sorted by key:
+        data = project.ReadMap(key)
+        min, max = FindRange(data)
+        preview = NormalizeToGrayscaleTexture(data, min, max)
+        draw key, resolution, min/max, preview
+```
+
 ## 注意 · 距离语义
 
 - **map 与 terrain 的尺寸无固定比例**：map（栅格，尺寸 = 主配置 `mapResolution`）可映射到任意实际 Terrain 尺寸，**可理解为 map 是 terrain 的俯视图**；映射比例在给定 Terrain 后按其实际 X/Z 尺寸计算。
