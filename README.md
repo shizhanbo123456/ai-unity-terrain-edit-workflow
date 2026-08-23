@@ -12,7 +12,9 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 |---|---|
 | 配置驱动 | 工作流最终产出 = **引用美术/模型素材的配置数据**（主配置 `TerrainPaintProjectSO`）；中间图（layerMap/RGB/高度预览）仅为编辑期可视化，**不再是交付物** |
 | 数据优先 | 栅格数据一律以 `float[][]` 为最终形态，存为 CSV txt（MapData）；**运行时只读 float[][]，图片仅供人看** |
-| 构建端分离 | 运行时/编辑器靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/植被/树 + 实例化摆件） |
+| 单一生成核心 | 完整生成算法与 `TerrainBuilder` 均为运行时代码；编辑器预览和 Player 构建必须调用同一套公开生成入口，不维护两份算法 |
+| 编辑器只做适配 | `Editor` 目录只负责配置编辑、资产读写、撤销、按钮与可视化预览；不容纳实际地形生成规则 |
+| 构建端分离 | 运行时/编辑器都靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/散布/摆件/定点） |
 | bridge 按需 | `unity-python-bridge` 只是按需取用的外围工具（量尺寸/截图/可选一键构建），**不参与主链路** |
 
 ## 名词解释
@@ -161,10 +163,13 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.3**（
 - **ApplyAlphamap 草案**：逐像素 `L = layerMap[p]`，`base = road[p]>0.5 ? roadLayerWeights[L] : naturalLayerWeights[L]`；对权重>0 的层叠加独立 Perlin 噪声打破条带（`w[i] = base[i] × (1 - blendSoft + blendSoft × n)`），可选按 `distance`（构建时现算归一化）做层边界渐变，归一化 Σw=1 → SetAlphamaps。参数（noiseScale / blendSoft / 是否距离场过渡）**[待设计]**；**seed 均为全局 seed**。
 - **L = -1（透明区域）的权重方案 [待设计]**：默认纹理权重或全 0，见阶段 1 的透明区域特殊处理。
 
-### 阶段 8 · 运行时 [待设计]
+### 阶段 8 · 运行时 [进行中]
 
 - 运行时只读 float[][]（主配置 `mapDataFiles` 持 TextAsset 引用，随构建打包）；图片永不参与运行时。
-- 形态 **[待设计]**：TerrainBuilder 暴露 `Build()`，具体在 Awake / 场景加载 / 手动调用，由实际项目按需接入；散布编辑由 **`SetCameraPosition(Vector2)`** 按生成组流式生成 / 回收（区块管理器驱动，见阶段 5）。
+- `TerrainRoadGen`、`DistanceFieldGenerator`、`UniformPointGenerator`、`ChunkUpdateManager` 等核心算法均不依赖 `UnityEditor`，Player 中可直接调用。
+- `TerrainBuilder.Build(projectConfig, terrain, applyThrough)` 是编辑器与运行时共用的唯一实地形应用入口；窗口的「应用」按钮只是对该入口的编辑器包装。
+- 散布阶段由 `SetCameraPosition(Vector2)` 按生成组流式生成 / 回收（区块管理器驱动，见阶段 5）。
+- 尚未实现的 `ApplyHeight / ApplyTexture / ApplyProps / ApplyFixedPoints` 也必须实现在运行时的 `TerrainBuilder` 或其运行时服务中，不得实现在 `LayerEditorWindow`。
 
 ## MapData 存储层 [已完成]
 
