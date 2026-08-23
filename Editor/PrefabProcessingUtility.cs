@@ -15,6 +15,14 @@ namespace AiTerrainWorkflow.Editor
         public const string WorkflowRoot = "Assets/ai-unity-terrain-edit-workflow";
         public const string BillboardOutputDirectory =
             "Assets/ai-unity-terrain-edit-workflow/Billboards";
+        public const string BillboardMaterialDirectory =
+            "Assets/ai-unity-terrain-edit-workflow/Billboards/Materials";
+        private const string BillboardTemplateMaterialPath =
+            "Assets/ai-unity-terrain-edit-workflow/src/billboard.mat";
+        private const string CrossPlaneModelPath =
+            "Assets/ai-unity-terrain-edit-workflow/src/CrossShapedPatches.fbx";
+        private const string LinearPlaneModelPath =
+            "Assets/ai-unity-terrain-edit-workflow/src/LinearShapePatch.fbx";
 
         /// <summary>判断 Prefab 是否为可供工作流三个摆放模块引用的已处理备用 Prefab。</summary>
         public static bool IsProcessedCandidatePrefab(GameObject prefab, out string reason)
@@ -58,12 +66,12 @@ namespace AiTerrainWorkflow.Editor
         /// 然后写入/更新根节点上的 PrefabStructureInfo。
         /// </summary>
         /// <param name="targetPrefab">Project 中作为内容来源的 .prefab 资产。</param>
-        /// <param name="generateBillboard">是否生成 Billboard（当前由信息组件保存该配置）。</param>
+        /// <param name="billboardMode">Billboard/LOD 使用方式。</param>
         /// <param name="twoPointHeightAdaptation">是否启用两点高度适应。</param>
         /// <returns>创建完成的包装 Prefab 资产。</returns>
         public static GameObject BuildCandidatePrefab(
             GameObject targetPrefab,
-            bool generateBillboard,
+            BillboardMode billboardMode,
             bool twoPointHeightAdaptation)
         {
             if (targetPrefab == null)
@@ -112,7 +120,7 @@ namespace AiTerrainWorkflow.Editor
 
             PrefabStructureInfo.UpdatePrefabStructure(
                 candidatePrefab,
-                generateBillboard,
+                billboardMode,
                 twoPointHeightAdaptation);
 
             return AssetDatabase.LoadAssetAtPath<GameObject>(outputPath);
@@ -120,7 +128,8 @@ namespace AiTerrainWorkflow.Editor
 
         /// <summary>
         /// 遍历工作流目录下所有挂有 PrefabStructureInfo 的候选 Prefab，
-        /// 为 generateBillboard=true 的对象从 (0,0,1) 方向生成正交 Billboard。
+        /// 为 billboardMode!=None 的对象从 (0,0,1) 方向生成正交 Billboard，
+        /// 随后创建对应面片、独立材质并配置 LODGroup。
         /// </summary>
         /// <returns>成功更新的 Billboard 数量。</returns>
         public static int UpdateAllBillboards()
@@ -130,12 +139,12 @@ namespace AiTerrainWorkflow.Editor
             {
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var info = prefab != null ? prefab.GetComponent<PrefabStructureInfo>() : null;
-                if (info == null || !info.generateBillboard)
+                if (info == null || info.billboardMode == BillboardMode.None)
                     continue;
 
                 try
                 {
-                    PrefabBillboardCommand.Billboard(
+                    var result = PrefabBillboardCommand.Billboard(
                         new BridgeContext(),
                         new BridgeArgs
                         {
@@ -143,7 +152,15 @@ namespace AiTerrainWorkflow.Editor
                             output = BillboardOutputDirectory,
                             cameraPosition = new[] { 0f, 0f, 1f },
                             pixelsPerMeter = 100f,
-                        });
+                        }) as PrefabBillboardResult;
+                    if (result == null)
+                        throw new InvalidOperationException("prefab.billboard 未返回 PrefabBillboardResult");
+
+                    string texturePath = BillboardOutputDirectory + "/" +
+                                         Path.GetFileNameWithoutExtension(prefabPath) + ".png";
+                    AssetDatabase.Refresh();
+                    AssetDatabase.ImportAsset(texturePath, ImportAssetOptions.ForceSynchronousImport);
+                    AttachBillboard(prefabPath, info.billboardMode, texturePath, result);
                     updated++;
                 }
                 catch (Exception exception)
@@ -238,6 +255,116 @@ namespace AiTerrainWorkflow.Editor
                 if (contentsRoot != null)
                     PrefabUtility.UnloadPrefabContents(contentsRoot);
             }
+        }
+
+        private static void AttachBillboard(
+            string prefabPath,
+            BillboardMode mode,
+            string texturePath,
+            PrefabBillboardResult capture)
+        {
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+            if (texture == null)
+                throw new InvalidOperationException("无法加载 Billboard 图片: " + texturePath);
+
+            EnsureAssetFolder(BillboardMaterialDirectory);
+            string materialPath = BillboardMaterialDirectory + "/" +
+                                  Path.GetFileNameWithoutExtension(prefabPath) + "_Billboard.mat";
+            var billboardShader = Shader.Find("Custom/BothFaceRender");
+            if (billboardShader == null)
+                throw new InvalidOperationException("找不到 Shader: Custom/BothFaceRender");
+            var material = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+            if (material == null)
+            {
+                var template = AssetDatabase.LoadAssetAtPath<Material>(BillboardTemplateMaterialPath);
+                if (template != null)
+                    material = new Material(template);
+                else
+                    material = new Material(billboardShader);
+                AssetDatabase.CreateAsset(material, materialPath);
+            }
+            material.shader = billboardShader;
+            material.mainTexture = texture;
+            EditorUtility.SetDirty(material);
+
+            string modelPath = mode == BillboardMode.CrossPlanes
+                ? CrossPlaneModelPath
+                : LinearPlaneModelPath;
+            var planeModel = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
+            if (planeModel == null)
+                throw new InvalidOperationException("找不到 Billboard 面片模型: " + modelPath);
+
+            GameObject contentsRoot = null;
+            try
+            {
+                contentsRoot = PrefabUtility.LoadPrefabContents(prefabPath);
+                var info = contentsRoot.GetComponent<PrefabStructureInfo>();
+                if (info == null)
+                    throw new InvalidOperationException("备用 Prefab 根节点缺少 PrefabStructureInfo");
+
+                Transform oldBillboard = contentsRoot.transform.Find("_Billboard");
+                if (oldBillboard != null)
+                    UnityEngine.Object.DestroyImmediate(oldBillboard.gameObject);
+
+                Renderer[] originalRenderers = contentsRoot.GetComponentsInChildren<Renderer>(true);
+                var billboard = PrefabUtility.InstantiatePrefab(planeModel, contentsRoot.transform) as GameObject;
+                if (billboard == null)
+                    throw new InvalidOperationException("Billboard 面片实例化失败: " + modelPath);
+                billboard.name = "_Billboard";
+                billboard.transform.localPosition = Vector3.zero;
+                billboard.transform.localRotation = Quaternion.identity;
+                billboard.transform.localScale = Vector3.one;
+
+                Renderer[] billboardRenderers = billboard.GetComponentsInChildren<Renderer>(true);
+                if (billboardRenderers.Length == 0)
+                    throw new InvalidOperationException("Billboard 面片不包含 Renderer: " + modelPath);
+                foreach (Renderer renderer in billboardRenderers)
+                    renderer.sharedMaterial = material;
+
+                Bounds planeBounds = billboardRenderers[0].bounds;
+                for (int i = 1; i < billboardRenderers.Length; i++)
+                    planeBounds.Encapsulate(billboardRenderers[i].bounds);
+                float sourceWidth = mode == BillboardMode.CrossPlanes
+                    ? Mathf.Max(planeBounds.size.x, planeBounds.size.z)
+                    : planeBounds.size.x;
+                float sourceHeight = planeBounds.size.y;
+                float horizontalScale = capture.projectedWidth / Mathf.Max(0.0001f, sourceWidth);
+                float verticalScale = capture.projectedHeight / Mathf.Max(0.0001f, sourceHeight);
+                billboard.transform.localScale = new Vector3(
+                    horizontalScale, verticalScale, horizontalScale);
+                billboard.transform.localPosition = capture.boundsCenter;
+
+                info.billboardMode = mode;
+                info.billboardTransform = billboard.transform;
+
+                var lodGroup = contentsRoot.GetComponent<LODGroup>();
+                if (lodGroup == null)
+                    lodGroup = contentsRoot.AddComponent<LODGroup>();
+                lodGroup.SetLODs(new[]
+                {
+                    new LOD(0.5f, originalRenderers),
+                    new LOD(0.01f, billboardRenderers),
+                });
+                lodGroup.RecalculateBounds();
+
+                PrefabUtility.SaveAsPrefabAsset(contentsRoot, prefabPath);
+            }
+            finally
+            {
+                if (contentsRoot != null)
+                    PrefabUtility.UnloadPrefabContents(contentsRoot);
+            }
+
+            AssetDatabase.SaveAssets();
+        }
+
+        private static void EnsureAssetFolder(string assetPath)
+        {
+            string fullPath = Path.Combine(
+                Application.dataPath,
+                assetPath.Substring("Assets/".Length));
+            Directory.CreateDirectory(fullPath);
+            AssetDatabase.Refresh();
         }
     }
 }

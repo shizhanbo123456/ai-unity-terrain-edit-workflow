@@ -63,7 +63,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // 备用 Prefab 批量创建（仅窗口会话状态）。
         private readonly List<GameObject> _candidatePrefabSources = new List<GameObject>();
-        private bool _candidateGenerateBillboard;
+        private BillboardMode _candidateBillboardMode;
         private bool _candidateTwoPointHeightAdaptation;
 
         // 创建配置 UI
@@ -580,8 +580,8 @@ namespace AiTerrainWorkflow.LayerEditor
             if (GUILayout.Button("添加 Prefab 到列表", GUILayout.Height(22f)))
                 _candidatePrefabSources.Add(null);
 
-            _candidateGenerateBillboard = EditorGUILayout.Toggle(
-                "生成 Billboard", _candidateGenerateBillboard);
+            _candidateBillboardMode = (BillboardMode)EditorGUILayout.EnumPopup(
+                "Billboard 模式", _candidateBillboardMode);
             _candidateTwoPointHeightAdaptation = EditorGUILayout.Toggle(
                 "两点高度适应", _candidateTwoPointHeightAdaptation);
 
@@ -595,7 +595,7 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("批量更新备用预制体", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "Billboard 仅处理已启用生成标记的对象；普通包围盒更新会跳过已有数据的对象。",
+                "Billboard 仅处理模式不是“不使用 LOD”的对象；普通包围盒更新会跳过已有数据的对象。",
                 MessageType.None);
 
             if (GUILayout.Button("批量更新 Billboard", GUILayout.Height(24f)))
@@ -653,7 +653,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 {
                     PrefabProcessingUtility.BuildCandidatePrefab(
                         sourcePrefab,
-                        _candidateGenerateBillboard,
+                        _candidateBillboardMode,
                         _candidateTwoPointHeightAdaptation);
                     created++;
                 }
@@ -767,15 +767,28 @@ namespace AiTerrainWorkflow.LayerEditor
             ValidateLodForFutureBillboard(prefab, location, errors);
         }
 
-        /// <summary>
-        /// LOD/Billboard 挂载检查预留入口。后续确定 LOD 层级与 Billboard Renderer 规则后在此实现；
-        /// 当前不阻断应用。
-        /// </summary>
         private static void ValidateLodForFutureBillboard(
             GameObject prefab,
             string location,
             List<string> errors)
         {
+            var info = prefab.GetComponent<PrefabStructureInfo>();
+            if (info == null || info.billboardMode == BillboardMode.None)
+                return;
+
+            var lodGroup = prefab.GetComponent<LODGroup>();
+            if (lodGroup == null)
+            {
+                errors.Add($"• {location}: {AssetDatabase.GetAssetPath(prefab)} — " +
+                           "已启用 Billboard，但根节点缺少 LODGroup；请先批量更新 Billboard");
+                return;
+            }
+            if (info.billboardTransform == null ||
+                info.billboardTransform.GetComponentsInChildren<Renderer>(true).Length == 0)
+            {
+                errors.Add($"• {location}: {AssetDatabase.GetAssetPath(prefab)} — " +
+                           "Billboard 面片未正常挂载；请先批量更新 Billboard");
+            }
         }
 
         /// <summary>调整 Layer 数量：增层创建新 SO（末尾追加），减层删除末尾 SO 资产。</summary>

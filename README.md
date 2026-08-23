@@ -497,7 +497,7 @@ LayerEditor/
 ├── ScatterConfigSO.cs          [已完成] 单个散布生成组配置
 ├── PropConfigSO.cs             [已完成] 单个摆件生成组配置（实际放置待开发）
 ├── FixedPointConfigSO.cs       [已完成] 单个定点生成组配置（实际应用待开发）
-├── PrefabStructureInfo.cs      [已完成] 候选 Prefab 根节点结构信息（Billboard/两点高度适应标记 + 静态更新入口）
+├── PrefabStructureInfo.cs      [已完成] 候选 Prefab 结构信息（Bounds、BillboardMode、运行时面片朝向 + 静态更新入口）
 ├── TerrainBuilder.cs           [进行中] 构建组件（分组散布已实现；高度/贴图/摆件/定点待实现）
 └── Editor/
     ├── LayerEditorWindow.cs    [已完成] 八阶段工作流窗口（散布生成组 + 最终应用页 + MapData 接线）
@@ -535,8 +535,10 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - 备用 Prefab 必须位于 `Assets/ai-unity-terrain-edit-workflow/` 内，根节点必须挂有 `PrefabStructureInfo`，且根 Transform 必须为 position `(0,0,0)`、rotation identity、scale `(1,1,1)`。
 - 备用 Prefab 使用空的标准根节点包装原始 Prefab；原始素材只作为嵌套 Prefab 被引用，工具不会修改原始 Prefab。
 - 工具产生的主配置、生成组、MapData、备用 Prefab 和 Billboard 全部保存在 `Assets/ai-unity-terrain-edit-workflow/` 内。删除该工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
-- 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo` 或根 Transform 未归一化都会阻止应用，并显示具体生成组和资源路径。
-- LOD/Billboard 组件完整性检查已预留独立校验入口；待 LOD 层级及 Billboard Renderer 规则确定后启用，当前不会阻断应用。
+- `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。
+- 批量更新 Billboard 固定从 `(0,0,1)` 截图，为每个备用 Prefab 在 `Billboards/Materials/` 创建独立材质，使用 `src/billboard.mat`（双面、不投射/接收阴影）为模板，并自动装入 `src` 中对应的十字/一字面片。
+- Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1。
+- 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
 - 应用页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds。
 
 ## 与 unity-python-bridge 的关系 [按需]

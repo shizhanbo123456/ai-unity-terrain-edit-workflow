@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -7,6 +8,18 @@ using UnityEditor;
 
 namespace AiTerrainWorkflow.LayerEditor
 {
+    public enum BillboardMode
+    {
+        [InspectorName("不使用 LOD")]
+        None = 0,
+        [InspectorName("使用十字面片")]
+        CrossPlanes = 1,
+        [InspectorName("一字面片朝向相机")]
+        FaceCamera = 2,
+        [InspectorName("一字面片仅偏航转向")]
+        YawOnly = 3,
+    }
+
     /// <summary>
     /// 挂在候选 Prefab 根节点上的结构信息。
     /// 供散布、摆件、定点等生成流程共享 Prefab 级别的放置元数据。
@@ -14,8 +27,12 @@ namespace AiTerrainWorkflow.LayerEditor
     [DisallowMultipleComponent]
     public sealed class PrefabStructureInfo : MonoBehaviour
     {
-        [Tooltip("是否为该 Prefab 生成 Billboard；具体生成规则后续接入")]
-        public bool generateBillboard;
+        [FormerlySerializedAs("generateBillboard")]
+        [Tooltip("Billboard/LOD 使用方式")]
+        public BillboardMode billboardMode;
+
+        [Tooltip("自动生成的 Billboard 面片节点")]
+        public Transform billboardTransform;
 
         [Tooltip("是否使用两点高度适应；具体语义和算法后续接入")]
         public bool twoPointHeightAdaptation;
@@ -35,12 +52,12 @@ namespace AiTerrainWorkflow.LayerEditor
         /// 每次调用均设置 localPosition=zero、localRotation=identity、localScale=one。
         /// </summary>
         /// <param name="targetPrefab">Project 中的目标 .prefab 资产。</param>
-        /// <param name="generateBillboard">是否生成 Billboard（当前仅保存配置）。</param>
+        /// <param name="billboardMode">Billboard/LOD 使用方式。</param>
         /// <param name="twoPointHeightAdaptation">是否启用两点高度适应。</param>
         /// <returns>保存后的 PrefabStructureInfo 组件。</returns>
         public static PrefabStructureInfo UpdatePrefabStructure(
             GameObject targetPrefab,
-            bool generateBillboard,
+            BillboardMode billboardMode,
             bool twoPointHeightAdaptation)
         {
             if (targetPrefab == null)
@@ -68,7 +85,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (info == null)
                     info = contentsRoot.AddComponent<PrefabStructureInfo>();
 
-                info.generateBillboard = generateBillboard;
+                info.billboardMode = billboardMode;
                 info.twoPointHeightAdaptation = twoPointHeightAdaptation;
 
                 PrefabUtility.SaveAsPrefabAsset(contentsRoot, assetPath);
@@ -87,5 +104,26 @@ namespace AiTerrainWorkflow.LayerEditor
             return savedInfo;
         }
 #endif
+
+        private void Update()
+        {
+            if (billboardTransform == null || billboardMode == BillboardMode.None ||
+                billboardMode == BillboardMode.CrossPlanes)
+                return;
+
+            Camera mainCamera = Camera.main;
+            if (mainCamera == null)
+                return;
+
+            if (billboardMode == BillboardMode.FaceCamera)
+            {
+                billboardTransform.rotation = mainCamera.transform.rotation;
+            }
+            else if (billboardMode == BillboardMode.YawOnly)
+            {
+                billboardTransform.rotation = Quaternion.Euler(
+                    0f, mainCamera.transform.rotation.eulerAngles.y, 0f);
+            }
+        }
     }
 }
