@@ -486,6 +486,9 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorUtility.SetDirty(layer);
             }
 
+            EditorGUILayout.Space(16);
+            DrawCandidatePrefabProcessing();
+
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
         }
@@ -557,6 +560,40 @@ namespace AiTerrainWorkflow.LayerEditor
         private void DrawApplyView()
         {
             _configScroll = EditorGUILayout.BeginScrollView(_configScroll);
+
+            EditorGUILayout.LabelField("应用", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "这是工作流的最后一步。选择目标 Terrain 和需要应用到的最终阶段，然后按顺序执行高度至该阶段。",
+                MessageType.Info);
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("目标 Terrain（仅本次窗口会话，不保存到配置）", EditorStyles.boldLabel);
+            _terrainField = (Terrain)EditorGUILayout.ObjectField(
+                "Terrain", _terrainField, typeof(Terrain), true);
+
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("应用范围", EditorStyles.boldLabel);
+            string[] stageNames = { "高度编辑", "贴图编辑", "散布编辑", "摆件编辑", "定点编辑" };
+            bool previousEnabled = true;
+            for (int i = 0; i < _applyStages.Length; i++)
+            {
+                using (new EditorGUI.DisabledScope(!previousEnabled))
+                    _applyStages[i] = previousEnabled && EditorGUILayout.ToggleLeft(stageNames[i], _applyStages[i]);
+                previousEnabled &= _applyStages[i];
+            }
+            EditorGUILayout.HelpBox("阶段按界面顺序应用；当前置阶段未勾选时，其后的阶段不会应用。", MessageType.None);
+
+            using (new EditorGUI.DisabledScope(_terrainField == null || !_applyStages[0]))
+            {
+                if (GUILayout.Button("应用", GUILayout.Height(28f)))
+                    ApplyWorkflowToTerrain();
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawCandidatePrefabProcessing()
+        {
             EditorGUILayout.LabelField("备用预制体处理", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "批量创建和处理工作流目录下的备用预制体。创建时会为每个源 Prefab 生成标准 Transform 的同名包装 Prefab，" +
@@ -611,37 +648,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (GUILayout.Button("强制更新包围盒", GUILayout.Height(24f)))
                     RunCandidatePrefabBatch("包围盒（强制）", () => PrefabProcessingUtility.UpdateAllBounds(true));
             }
-
-            EditorGUILayout.Space(18);
-            EditorGUILayout.LabelField("应用", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "这是工作流的最后一步。选择目标 Terrain 和需要应用到的最终阶段，然后按顺序执行高度至该阶段。",
-                MessageType.Info);
-
-            EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField("目标 Terrain（仅本次窗口会话，不保存到配置）", EditorStyles.boldLabel);
-            _terrainField = (Terrain)EditorGUILayout.ObjectField(
-                "Terrain", _terrainField, typeof(Terrain), true);
-
-            EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("应用范围", EditorStyles.boldLabel);
-            string[] stageNames = { "高度编辑", "贴图编辑", "散布编辑", "摆件编辑", "定点编辑" };
-            bool previousEnabled = true;
-            for (int i = 0; i < _applyStages.Length; i++)
-            {
-                using (new EditorGUI.DisabledScope(!previousEnabled))
-                    _applyStages[i] = previousEnabled && EditorGUILayout.ToggleLeft(stageNames[i], _applyStages[i]);
-                previousEnabled &= _applyStages[i];
-            }
-            EditorGUILayout.HelpBox("阶段按界面顺序应用；当前置阶段未勾选时，其后的阶段不会应用。", MessageType.None);
-
-            using (new EditorGUI.DisabledScope(_terrainField == null || !_applyStages[0]))
-            {
-                if (GUILayout.Button("应用", GUILayout.Height(28f)))
-                    ApplyWorkflowToTerrain();
-            }
-
-            EditorGUILayout.EndScrollView();
         }
 
         private int BuildCandidatePrefabsFromList()

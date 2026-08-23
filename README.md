@@ -543,7 +543,7 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1；LOD0 在屏幕相对高度降至 10% 时切换到 LOD1，LOD1 在 1% 时剔除。
 - **已知问题（待后续解决）**：透明交叉面片存在渲染遮挡/排序异常，特定视角下可能表现为其中一个面片始终位于另一个面片前方。当前 Shader 的透明深度方案不能覆盖所有交叉透明面的排序情形，后续需要专门调整渲染方案。
 - 应用 Terrain 前会扫描散布、摆件、定点的全部 Prefab 引用；空引用、工具目录外引用、缺少 `PrefabStructureInfo`、根 Transform 未归一化，以及已启用 Billboard 但缺少有效 `LODGroup`/面片都会阻止应用，并显示具体生成组和资源路径。
-- 应用页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds。
+- 工作流配置页的备用预制体区域提供：批量创建备用 Prefab、批量生成 Billboard、按需更新 Bounds、强制更新 Bounds；应用页仅保留目标 Terrain、应用阶段和执行入口。
 
 ## 与 unity-python-bridge 的关系 [按需]
 
