@@ -9,18 +9,11 @@ Shader "Custom/BothFaceRender"
     }
     SubShader
     {
-        Tags
-        {
-            "Queue"="Transparent"
-            "RenderType"="Transparent"
-        }
+        Tags { "Queue"="Transparent" "RenderType"="Transparent" }
         LOD 200
-        Cull Off
-        ZWrite On
-        Blend SrcAlpha OneMinusSrcAlpha
 
         CGPROGRAM
-        // Physically based Standard lighting model, with alpha transparency.
+        // Physically based Standard lighting model, and enable shadows on all light types
         #pragma surface surf Standard alpha:fade fullforwardshadows
 
         // Use shader model 3.0 target, to get nicer looking lighting
@@ -31,7 +24,6 @@ Shader "Custom/BothFaceRender"
         struct Input
         {
             float2 uv_MainTex;
-            float facing : VFACE;
         };
 
         half _Glossiness;
@@ -49,9 +41,7 @@ Shader "Custom/BothFaceRender"
         {
             // Albedo comes from a texture tinted by color
             fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
-            clip(c.a - 0.001);
             o.Albedo = c.rgb;
-            o.Normal = fixed3(0, 0, IN.facing >= 0 ? 1 : -1);
             // Metallic and smoothness come from slider variables
             o.Metallic = _Metallic;
             o.Smoothness = _Glossiness;
