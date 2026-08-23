@@ -255,6 +255,7 @@ namespace AiTerrainWorkflow.Editor
                     output = BillboardOutputDirectory,
                     cameraPosition = new[] { 0f, 0f, 1f },
                     pixelsPerMeter = 100f,
+                    light = 2f,
                 }) as PrefabBillboardResult;
             if (result == null)
                 throw new InvalidOperationException("prefab.billboard 未返回 PrefabBillboardResult");
@@ -365,7 +366,12 @@ namespace AiTerrainWorkflow.Editor
                 float verticalScale = capture.projectedHeight / PlaneSourceHeight;
                 billboard.transform.localScale = new Vector3(
                     horizontalScale, verticalScale, horizontalScale);
-                billboard.transform.localPosition = capture.boundsCenter;
+                // 面片 Prefab 的 Y 枢轴位于底边，X/Z 枢轴位于水平中心。
+                // 因此水平轴继续对齐 AABB 中心，垂直轴则对齐截图投影的最低点。
+                billboard.transform.localPosition = new Vector3(
+                    capture.boundsCenter.x,
+                    capture.boundsCenter.y - capture.projectedHeight * 0.5f,
+                    capture.boundsCenter.z);
 
                 info.billboardMode = mode;
                 info.billboardTransform = billboard.transform;
