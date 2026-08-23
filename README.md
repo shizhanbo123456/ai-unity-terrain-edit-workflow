@@ -548,6 +548,7 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 
 - bridge 仍不参与 Unity 编辑器主链路；本项目通过项目内 Editor 扩展注册命令，依赖 bridge 而不修改它。
 - `workflow.configure` 是唯一配置写入口，`workflow.run` 读取同一份完整 JSON 并继续完成 Prefab 处理、区域重建、派生图烘焙、应用前校验和 Terrain 构建。
+- manifest 的 `terrain` 可留空；`workflow.run` 会自动使用场景中找到的第一个 Terrain。填写名称时则精确查找，场景中没有 Terrain 会直接报错。
 - Python CLI、命令参数及 manifest 说明见 [BRIDGE.md](BRIDGE.md)。关掉 bridge 时 Unity 编辑器工作流照常使用。
 
 ## 实施里程碑

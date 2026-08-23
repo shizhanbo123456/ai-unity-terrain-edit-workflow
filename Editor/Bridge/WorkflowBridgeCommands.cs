@@ -210,7 +210,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
             return Result("build", AssetDatabase.GetAssetPath(project), "built " + terrain.name, 1);
         }
 
-        [BridgeCommand("workflow.run", "执行完整 JSON manifest：创建/配置/Prefab/区域/烘焙/验证/可选Build")]
+        [BridgeCommand("workflow.run", "执行完整 JSON manifest：创建/配置/Prefab/区域/烘焙/验证/Build；terrain 为空时自动寻找")]
         public static object Run(BridgeContext context, BridgeArgs args)
         {
             WorkflowManifest manifest = ParseManifest(args.message);
@@ -225,13 +225,10 @@ namespace AiTerrainWorkflow.Editor.Bridge
             List<string> errors = ValidateProject(project);
             if (errors.Count > 0)
                 return new WorkflowBridgeResult { operation = "run", projectPath = AssetDatabase.GetAssetPath(project), valid = false, errors = errors.ToArray(), count = errors.Count, message = "validation failed" };
-            if (!string.IsNullOrWhiteSpace(manifest.terrain))
-            {
-                Terrain terrain = FindTerrain(manifest.terrain);
-                TerrainBuilder builder = terrain.GetComponent<TerrainBuilder>() ?? terrain.gameObject.AddComponent<TerrainBuilder>();
-                builder.Build(project, terrain, ParseEnum(manifest.applyThrough, TerrainWorkflowStage.FixedPointEdit));
-                EditorUtility.SetDirty(terrain.gameObject);
-            }
+            Terrain terrain = FindTerrain(manifest.terrain);
+            TerrainBuilder builder = terrain.GetComponent<TerrainBuilder>() ?? terrain.gameObject.AddComponent<TerrainBuilder>();
+            builder.Build(project, terrain, ParseEnum(manifest.applyThrough, TerrainWorkflowStage.FixedPointEdit));
+            EditorUtility.SetDirty(terrain.gameObject);
             return Result("run", AssetDatabase.GetAssetPath(project), "complete", 1);
         }
 

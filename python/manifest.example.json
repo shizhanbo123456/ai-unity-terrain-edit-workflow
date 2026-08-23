@@ -45,6 +45,6 @@
   "propGroups": [{"name":"Benches","maxFailedAttempts":20,"density":0.01,"batchSize":[1,4],"layerMask":2,"outOfBoundsTolerance":1,"basis":"OffRoad","range":[0,3],"rotation":"AlongContour","distribution":"Scatter","spacing":1,"prefabs":[{"path":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Bench.prefab","weight":10,"minimumCount":1}]}],
   "fixedGroups": [{"markerColor":[0,1,1,1],"prefab":"Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/Bench.prefab","positions":[0.25,0.25,0.75,0.75],"rotation":90,"scale":1}],
   "bake": true,
-  "terrain": "Terrain",
+  "terrain": "",
   "applyThrough": "FixedPointEdit"
 }

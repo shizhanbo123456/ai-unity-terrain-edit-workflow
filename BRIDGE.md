@@ -22,7 +22,7 @@ python python\workflow_bridge.py --help
 python python\workflow_bridge.py run python\manifest.example.json
 ```
 
-`run` 按以下顺序执行：创建或加载项目、构建备用 Prefab、写入工作流配置与生成组、重建区域操作、烘焙派生 MapData、校验 Prefab/LOD/根变换，并在 manifest 指定 `terrain` 时构建真实 Terrain。校验失败时 CLI 返回退出码 2，并输出逐项错误。
+`run` 按以下顺序执行：创建或加载项目、构建备用 Prefab、写入工作流配置与生成组、重建区域操作、烘焙派生 MapData、校验 Prefab/LOD/根变换，并构建真实 Terrain。`terrain` 填写名称时精确查找；留空字符串时自动使用场景中找到的第一个 Terrain；场景中没有 Terrain 则报错。校验失败时 CLI 返回退出码 2，并输出逐项错误。
 
 只导入配置但不烘焙和构建时使用：
 
@@ -60,7 +60,7 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 - `prefabs`：需要先处理的源 Prefab 及 Billboard/两点适高选项。
 - `areaOperations`：`Line`（两点+半径）、`Rectangle`（两点）、`Triangle`（三点）的有序操作列表；坐标为 LayerMap 像素。
 - `bake`：是否重建全部派生图；否则只重建 LayerMap。
-- `terrain`、`applyThrough`：可选场景 Terrain 与最终应用阶段。
+- `terrain`、`applyThrough`：目标 Terrain 名称与最终应用阶段；`terrain` 可留空以自动寻找。
 
 距离约定：只有区域绘画坐标和半径使用像素；高度、道路宽度、散布间距、摆件间距等配置均按世界米解释。构建时由 Terrain 尺寸与 MapData 分辨率换算世界米/像素。
 
@@ -70,4 +70,4 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 - 生成组引用应指向处理后的 `Generated/Prefabs` 资产。若同一个 manifest 同时声明 `prefabs` 和生成组引用，`run` 会先创建备用 Prefab 再解析引用。
 - `prefabs[].path` 是一次性的源素材输入；`scatterGroups`、`propGroups`、`fixedGroups` 中的实际引用只能指向 `Generated/Prefabs/`，不能直接引用源 Prefab 或其它目录的 Prefab。
 - 备用 Prefab 是允许人工维护的工作流资产：可以移动、旋转、缩放其子物体，也可以增删和拼合多个对象；只需保持根节点标准 Transform。再次运行同名处理不会覆盖这些内容，修改后可重新生成 Bounds/Billboard。
-- 命令会保存工作流自身的资产；不会改写源 Prefab。只有 manifest 的 `terrain` 非空时，`run` 才会修改场景 Terrain。
+- 命令会保存工作流自身的资产；不会改写源 Prefab。`run` 总会构建场景 Terrain，`terrain` 为空时自动寻找；只想导入配置而不构建时使用 `configure`。
