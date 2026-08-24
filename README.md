@@ -19,6 +19,16 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.4**（
 
 现已提供完整 manifest 驱动的工作流 bridge 与 Python CLI。命令行修改配置的唯一方式是编辑完整 JSON 并由 C# 整体读取；不提供单字段修改命令。模板和使用方式见 [BRIDGE.md](BRIDGE.md)。
 
+## 分级精度要求（AI 搭建时参考）
+
+当用户要求 AI 搭建地形 / 场景时，以 [GENERATION_LEVELS.md](GENERATION_LEVELS.md) 为分级质量标准：
+
+- **L0 测试**：验证流程 / 单步功能，被要求步骤的数据完整生成；
+- **L1 普通地形**：多种 TerrainLayer、备用 Prefab 覆盖率 ≥60%、肉眼合格可玩；
+- **L2 高精度成品**：备用 Prefab 覆盖率 ≥90%、bridge 确认效果。
+
+构建前按该文档 §6「交付自查流程」逐项核对，并在交付时声明所达级别与未达标项。
+
 ## 名词解释
 
 | 名词 | 含义 |
@@ -557,7 +567,7 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - 首次生成使用空的标准根节点包装源 Prefab；生成后可自由调整所有子物体的变换，并可增加、删除或拼合多个对象。再次处理同名备用 Prefab 不会重建或覆盖这些人工修改，只更新结构信息与 Billboard。
 - **添加备选 Prefab 后必须到 `Generated/Prefabs/` 确认内容正确**：部分源 Prefab 的模型**中心正下方不在原点**（模型 pivot 不在底部中心，或底部与原点存在偏移），需要调整备用 Prefab 的子物体变换，使模型按预期落位（通常令模型底部中心对准根节点原点）；确认无误后再更新 Bounds 或生成 Billboard。修正只作用于子物体，根节点保持零变换。
 - 工具产生的主配置、生成组和 MapData 保存在工具内的 `TerrainGeneratorConfigs/`；所有备用 Prefab、Billboard 图片和派生材质集中保存在 `Generated/`，不会直接散落在工具根目录。删除工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
-- `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。
+- `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。**适用性：Billboard 仅建议用于树木、草丛等远观只求轮廓/体量的对象；房屋、建筑等不规则或轮廓关键的对象应保持 `billboardMode = None`，见 [GENERATION_LEVELS.md](GENERATION_LEVELS.md) §0 G8。**
 - 批量添加在 BillboardMode 非 None 时会立即完成截图、材质、面片和 LOD 装配；批量更新 Billboard 可在之后统一重建。截图固定来自 `(0,0,1)`，并使用强度 2 的相机同向平行光；每个备用 Prefab 使用 `src/billboard.mat` 为模板创建独立的透明、双面、无阴影材质，并自动装入 `src/cross.prefab` 或 `src/linear.prefab`。两个面片 Prefab 均使用标准根 Transform，模型为第一个子物体；缩放基准为宽 2m、高 1m。面片 X/Z 中心对齐 Bounds 中心，底部枢轴对齐 Bounds 的 Y 最低点。
 - 生成目录固定为：`Generated/Prefabs/`（备用 Prefab）、`Generated/Billboards/`（PNG）、`Generated/Materials/`（派生材质）。`Generated/` 已从工具源码版本控制中排除。
 - Billboard 生成后自动配置根节点 `LODGroup`：原模型 Renderers 为 LOD0，面片 Renderers 为 LOD1；**LOD0→LOD1 的切换阈值 = 处理预制体界面的「LOD Billboard 切换阈值」滑块（0~1，默认 0.1）**，LOD1 在 1% 时剔除。该阈值只是处理时的输入参数，不写入任何工作流配置，最终落在每个 Prefab 的 LODGroup 组件上。
