@@ -150,7 +150,6 @@ namespace AiTerrainWorkflow.LayerEditor
 #endif
             if (_config == null || _terrain == null) return;
             if (_scatterRuntimes.Count == 0) return;
-            Debug.Log("111");
             Camera camera = Camera.main;
             if (camera == null) return;
             Vector3 position = camera.transform.position;

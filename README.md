@@ -116,22 +116,24 @@ function NormalizedToTerrainWorld(uv, terrain):
 ```text
 function CalculateHeightMap(project, layerMap):
     for each pixel p:
-        layerIndex = round(layerMap[p])
-        layer = project.layers[layerIndex]
+        # 默认取中心像素所在层的 heightRange
+        range = HeightRangeAt(project, layerMap, p)
+
+        # 平滑：十字滤波采样周围一圈图层，按样本占比加权各层 heightRange
+        # （等价于 layer 权重混合，如边界处 layer1:40% / layer2:60%）。
+        # 区域内部样本全为同一层 → 权重 100% → 与原行为完全一致，
+        # 仅图层交界处产生加权过渡，因此只平滑边界、不影响区域内部。
+        if project.smoothIterations > 0:
+            samples = [center p]
+            for k in 1..smoothIterations:
+                samples += p ± (k * smoothStep, 0)
+                samples += p ± (0, k * smoothStep)
+            discard out-of-map samples
+            range = average of HeightRangeAt(samples)   # 分别平均 min / max
+
         worldXZ = p * PixelWorldSize(terrain, mapSize)
         noise = DeterministicNoise(worldXZ, project.heightSeed, project.heightScale)
-        height[p] = lerp(layer.heightRange.x, layer.heightRange.y, noise)
-
-    if project.smoothIterations > 0:
-        repeat according to configured smoothing rule:
-            for each p:
-                samples = center p
-                for k in 1..smoothIterations:
-                    samples += p ± (k * smoothStep, 0)
-                    samples += p ± (0, k * smoothStep)
-                discard out-of-map samples
-                smoothed[p] = average(samples)
-        height = smoothed
+        height[p] = lerp(range.min, range.max, noise)
     return height
 
 function ApplyHeight(session):
@@ -390,7 +392,7 @@ function WorkflowConfig.DrawMapDataPreview():
 - 逐点按所在层的 `heightRange`，用像素中心对应的世界 X/Z 坐标采样 Perlin 噪声（`heightSeed` + 世界空间 `heightScale` 频率），插值生成**真实高度**；Build 会按目标 Terrain 实际尺寸重算。
 - 真实高度直接写入 `MapData/height.txt`（float[][]，**不归一化**）；**范围不持久化**，由显示 / 构建时遍历数据现算（`ToTexture` 统计后以 `out` 传出）。
 - 预览图由窗口用 `MapDataTextureUtils.ToTexture` 生成，**不落盘**。
-- 平滑参数（`smoothStep` 步长 / `smoothIterations` 迭代，十字线均值滤波）已加入配置与窗口，**暂未参与运算**，后续接入 `BakeHeightData`。
+- 平滑参数（`smoothStep` 步长 / `smoothIterations` 迭代，十字线均值滤波）已实现于 `BakeHeightData`：不是对高度值求均值，而是用十字滤波采样周围一圈图层、按样本占比加权各层 `heightRange`（`smoothIterations=0` 时退化为单像素取层，行为与原实现一致）。区域内部样本全为同一层 → 权重 100% → 高度不变；仅图层交界处产生加权过渡，因此只平滑边界带、不影响区域内部的 Perlin 细节。
 
 ### 阶段 3 · 贴图编辑 [已完成]
 

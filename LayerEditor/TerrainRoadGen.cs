@@ -563,6 +563,9 @@ namespace AiTerrainWorkflow.LayerEditor
             float spacingX = Mathf.Max(0.0001f, pixelWorldSize.x);
             float spacingZ = Mathf.Max(0.0001f, pixelWorldSize.y);
 
+            int smoothIterations = Mathf.Max(0, project.smoothIterations);
+            int smoothStep = Mathf.Max(1, project.smoothStep);
+
             var data = new float[h][];
 
             for (int y = 0; y < h; y++)
@@ -571,10 +574,25 @@ namespace AiTerrainWorkflow.LayerEditor
                 for (int x = 0; x < w; x++)
                 {
                     int i = y * w + x;
-                    int lid = layerIds[i];
-                    Vector2 range = (lid >= 0 && lid < project.layers.Count && project.layers[lid] != null)
-                        ? project.layers[lid].heightRange
-                        : new Vector2(0f, 0f);
+
+                    // 图层范围：默认取中心像素所在层；开启平滑时用十字滤波采样周围一圈图层，
+                    // 按样本占比加权各层 heightRange（等价于 layer 权重混合）。区域内部样本
+                    // 全为同一层 → 权重 100% → 与原行为完全一致；仅图层交界处产生加权过渡。
+                    Vector2 range = HeightRangeAt(project, layerIds, i);
+                    if (smoothIterations > 0)
+                    {
+                        float sumMin = range.x, sumMax = range.y;
+                        int samples = 1;
+                        for (int k = 1; k <= smoothIterations; k++)
+                        {
+                            int d = k * smoothStep;
+                            if (x - d >= 0) { Vector2 r = HeightRangeAt(project, layerIds, y * w + x - d); sumMin += r.x; sumMax += r.y; samples++; }
+                            if (x + d < w) { Vector2 r = HeightRangeAt(project, layerIds, y * w + x + d); sumMin += r.x; sumMax += r.y; samples++; }
+                            if (y - d >= 0) { Vector2 r = HeightRangeAt(project, layerIds, (y - d) * w + x); sumMin += r.x; sumMax += r.y; samples++; }
+                            if (y + d < h) { Vector2 r = HeightRangeAt(project, layerIds, (y + d) * w + x); sumMin += r.x; sumMax += r.y; samples++; }
+                        }
+                        range = new Vector2(sumMin / samples, sumMax / samples);
+                    }
 
                     // Perlin 噪声（seed 偏移 + 空间频率 scale），在层级高度范围内插值（真实高度，不归一化）
                     float n = Mathf.PerlinNoise(
@@ -586,6 +604,15 @@ namespace AiTerrainWorkflow.LayerEditor
             }
 
             return data;
+        }
+
+        /// <summary>取某像素所在层的 heightRange；无效/透明层（-1）按 (0,0) 处理。</summary>
+        private static Vector2 HeightRangeAt(TerrainPaintProjectSO project, int[] layerIds, int idx)
+        {
+            int lid = layerIds[idx];
+            return (lid >= 0 && lid < project.layers.Count && project.layers[lid] != null)
+                ? project.layers[lid].heightRange
+                : Vector2.zero;
         }
 
         /// <summary>
