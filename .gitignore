@@ -9,3 +9,7 @@ Generated.meta
 # Python CLI 本地字节码缓存。
 python/__pycache__/
 python/__pycache__.meta
+
+# 本地模型视觉笔记（规则见 README 阶段 0，内容仅定性视觉描述，不纳入版本控制）。
+ModelFeature.md
+ModelFeature.md.meta

@@ -386,7 +386,7 @@ function WorkflowConfig.DrawMapDataPreview():
   - 再次通过处理工具导入同名备用 Prefab时，只更新结构信息和 Billboard，不覆盖人工修改的内容。
   - **添加备选 Prefab 后必须确认内容正确**：打开 `Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/` 下对应的备用 Prefab 检查模型。部分源 Prefab 的模型**中心正下方不在原点**（模型自身 pivot 不在底部中心，或在场景中摆放时底部与原点有偏移），此时需要修正子物体的变换，使模型按预期放置在原点（通常让模型底部中心落在根节点原点上）；确认无误后再更新 Bounds / 生成 Billboard。根节点本身不可移动（保持零变换），修正一律作用在子物体上。
   - **跨项目共享（处理一次、全局复用）**：备用 Prefab 是**工具级资产**（位于工具根 `Generated/Prefabs/`），**可被任意主配置对应的工具项目（`TerrainGeneratorConfigs/` 下任意项目）引用**；同一套美术资源（模型 / 贴图）只需处理一次，各项目通过各自生成组引用复用，避免同一模型内容在多个项目中被重复处理。阶段 0 是工具级的一次性处理，新建主配置项目不需要重新处理已处理过的素材。
-  - **处理后登记特征（ModelFeature.md）**：处理备用 Prefab 并**查看生成后的效果**（打开 Prefab / 场景视图检查模型落位，或查看模型截图）后，必须在工具根目录 `ModelFeature.md` 中记录该备用 Prefab 的特征（类型 / 尺寸 / 外形 / 落位方向 / Billboard 模式 / 摆放建议等），**文件不存在则创建**；特征变化时更新对应条目。该记录供后续散布 / 摆件 / 定点摆放时参考，避免每次摆放重新量测与试错。
+  - **处理后登记视觉笔记（ModelFeature.md，本地文件）**：处理备用 Prefab 并**查看生成后的效果**（打开 Prefab / 场景视图检查模型落位，或查看模型截图）后，在工具根目录 `ModelFeature.md` 记录该备用 Prefab 的**大致视觉效果**（外形 / 轮廓 / 朝向倾向等**定性**描述），**不记录具体参数等定量内容**（如尺寸数值、数值范围）；**文件不存在则创建**。该文件是**本地笔记**，已被 `.gitignore` 忽略、不随仓库分发，供后续散布 / 摆件 / 定点摆放时参考。
 - 摆件生成组使用独立的 `PropConfigSO`，不再复用简单对象列表容器。
 
 ### 阶段 1 · 区域编辑 [已完成]
@@ -569,7 +569,7 @@ Assets/ai-unity-terrain-edit-workflow/TerrainGeneratorConfigs/
 - 首次生成使用空的标准根节点包装源 Prefab；生成后可自由调整所有子物体的变换，并可增加、删除或拼合多个对象。再次处理同名备用 Prefab 不会重建或覆盖这些人工修改，只更新结构信息与 Billboard。
 - **添加备选 Prefab 后必须到 `Generated/Prefabs/` 确认内容正确**：部分源 Prefab 的模型**中心正下方不在原点**（模型 pivot 不在底部中心，或底部与原点存在偏移），需要调整备用 Prefab 的子物体变换，使模型按预期落位（通常令模型底部中心对准根节点原点）；确认无误后再更新 Bounds 或生成 Billboard。修正只作用于子物体，根节点保持零变换。
 - 工具产生的主配置、生成组和 MapData 保存在工具内的 `TerrainGeneratorConfigs/`；所有备用 Prefab、Billboard 图片和派生材质集中保存在 `Generated/`，不会直接散落在工具根目录。删除工具目录会同时移除全部工具产物，不会在原项目其他目录留下生成文件，也不会修改原始素材资产。
-- **跨项目共享 + 特征登记**：备用 Prefab 为工具级资产，可被多个主配置对应的工具项目共享引用（同一套素材只处理一次，不随项目重复处理）；确认效果后须在工具根目录 `ModelFeature.md` 登记其特征（类型 / 尺寸 / 外形 / 落位 / Billboard / 摆放建议）供摆放参考，文件不存在则创建。详见阶段 0。
+- **跨项目共享 + 视觉笔记**：备用 Prefab 为工具级资产，可被多个主配置对应的工具项目共享引用（同一套素材只处理一次，不随项目重复处理）；确认效果后须在工具根目录 `ModelFeature.md` 登记其**大致视觉效果**（定性描述，不记定量参数），该文件为本地笔记（`.gitignore` 忽略、不进版本库），文件不存在则创建。详见阶段 0。
 - `PrefabStructureInfo.billboardMode` 可选：不使用 LOD、使用十字面片、一字面片朝向相机、一字面片仅偏航转向。朝向相机模式每帧令 Billboard 子节点 rotation 完全等于 MainCamera rotation；仅偏航模式只跟随相机 Y 角。**适用性：Billboard 仅建议用于树木、草丛等远观只求轮廓/体量的对象；房屋、建筑等不规则或轮廓关键的对象应保持 `billboardMode = None`，见 [GENERATION_LEVELS.md](GENERATION_LEVELS.md) §0 G8。**
 - 批量添加在 BillboardMode 非 None 时会立即完成截图、材质、面片和 LOD 装配；批量更新 Billboard 可在之后统一重建。截图固定来自 `(0,0,1)`，并使用强度 2 的相机同向平行光；每个备用 Prefab 使用 `src/billboard.mat` 为模板创建独立的透明、双面、无阴影材质，并自动装入 `src/cross.prefab` 或 `src/linear.prefab`。两个面片 Prefab 均使用标准根 Transform，模型为第一个子物体；缩放基准为宽 2m、高 1m。面片 X/Z 中心对齐 Bounds 中心，底部枢轴对齐 Bounds 的 Y 最低点。
 - 生成目录固定为：`Generated/Prefabs/`（备用 Prefab）、`Generated/Billboards/`（PNG）、`Generated/Materials/`（派生材质）。`Generated/` 已从工具源码版本控制中排除。
