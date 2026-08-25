@@ -65,10 +65,81 @@ namespace AiTerrainWorkflow.Editor
             return true;
         }
 
+        /// <summary>位置标准化的执行结果。<see cref="StandardizePivotToOrigin"/> 使用。</summary>
+        public enum PivotStandardizeStatus
+        {
+            Ok,
+            /// <summary>整个 Prefab 内没有任何带有效网格的 Renderer（可能是空源或仅 Billboard 面片）。</summary>
+            NoRenderers,
+            /// <summary>根节点下没有直接子物体（mesh 直接挂在根上时无法在不移动根节点的情况下平移）。</summary>
+            NoChildren,
+            /// <summary>根节点自身挂有 Renderer，平移子物体无法修正根上的 mesh。</summary>
+            RootHasRenderer,
+        }
+
+        /// <summary>
+        /// 将根节点下所有直接子物体整体平移，使全部 Renderer（排除 <c>_Billboard</c> 子树）的合并 Bounds
+        /// 的「中心正下方」(center.x, min.y, center.z) 落在原点 (0,0,0)。根节点保持零变换。
+        /// 修正 Billboard 的同时也会被一起平移，从而保持它与模型的相对位置。
+        /// </summary>
+        /// <param name="root">Prefab 根节点（其局部变换在调用前应为 identity）。</param>
+        /// <param name="offset">实际应用的平移量（仅 Ok 时有意义）。</param>
+        /// <param name="before">修正前的合并 Bounds（仅 Ok 时有意义）。</param>
+        /// <param name="after">修正后的合并 Bounds（仅 Ok 时有意义）。</param>
+        public static PivotStandardizeStatus StandardizePivotToOrigin(
+            Transform root,
+            out Vector3 offset,
+            out Bounds before,
+            out Bounds after)
+        {
+            offset = Vector3.zero;
+            before = new Bounds();
+            after = new Bounds();
+            if (root == null) return PivotStandardizeStatus.NoRenderers;
+
+            Transform billboardT = root.Find("_Billboard");
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+
+            bool has = false;
+            Bounds comb = new Bounds();
+            foreach (Renderer r in renderers)
+            {
+                if (billboardT != null && (r.transform == billboardT || r.transform.IsChildOf(billboardT)))
+                    continue;
+                if (r.bounds.size.sqrMagnitude <= 0f) continue;
+                if (!has) { comb = r.bounds; has = true; }
+                else comb.Encapsulate(r.bounds);
+            }
+            if (!has) return PivotStandardizeStatus.NoRenderers;
+            if (root.childCount == 0) return PivotStandardizeStatus.NoChildren;
+            if (root.GetComponent<Renderer>() != null) return PivotStandardizeStatus.RootHasRenderer;
+
+            before = comb;
+            offset = new Vector3(-comb.center.x, -comb.min.y, -comb.center.z);
+            for (int i = 0; i < root.childCount; i++)
+                root.GetChild(i).localPosition += offset;
+
+            Bounds aft = new Bounds();
+            bool hasA = false;
+            foreach (Renderer r in renderers)
+            {
+                if (billboardT != null && (r.transform == billboardT || r.transform.IsChildOf(billboardT)))
+                    continue;
+                if (r.bounds.size.sqrMagnitude <= 0f) continue;
+                if (!hasA) { aft = r.bounds; hasA = true; }
+                else aft.Encapsulate(r.bounds);
+            }
+            after = aft;
+            return PivotStandardizeStatus.Ok;
+        }
+
         /// <summary>
         /// 在 Generated/Prefabs 创建同名备用 Prefab：空标准根节点 + 原 Prefab 的嵌套实例。
         /// 已存在的备用 Prefab 视为用户可编辑资产，只更新结构信息与可选 Billboard，绝不重建其内容；
         /// 因而可以调整子物体位置/方向/缩放、增加或删除子物体并拼合多个对象。
+        /// <para>创建时会自动调用 <see cref="StandardizePivotToOrigin"/>：把模型整体平移，使
+        /// 合并 Bounds 的「中心正下方」(center.x, min.y, center.z) 落在根节点原点；
+        /// 仅作用于创建时，创建后不会再修改其中物体的位置。</para>
         /// </summary>
         /// <param name="targetPrefab">Project 中作为内容来源的 .prefab 资产。</param>
         /// <param name="billboardMode">Billboard/LOD 使用方式。</param>
@@ -119,6 +190,18 @@ namespace AiTerrainWorkflow.Editor
 
                 nested.transform.SetParent(wrapperRoot.transform, false);
                 nested.name = targetPrefab.name;
+
+                // 创建时自动标准化：把模型整体平移，使合并 Bounds 的「中心正下方」落在根节点原点。
+                // 仅在创建时执行一次；创建后不会再修改其中物体的位置。
+                PivotStandardizeStatus stdStatus = StandardizePivotToOrigin(
+                    wrapperRoot.transform, out _, out _, out _);
+                if (stdStatus == PivotStandardizeStatus.NoChildren ||
+                    stdStatus == PivotStandardizeStatus.RootHasRenderer)
+                {
+                    throw new InvalidOperationException(
+                        $"备用 Prefab 创建时标准化失败：{stdStatus}（源 Prefab 形态不支持自动标准化，请手动处理: {sourcePath}）");
+                }
+                // NoRenderers（源无可标准化几何）允许，跳过；Ok 时已平移。
 
                 var saved = PrefabUtility.SaveAsPrefabAsset(wrapperRoot, outputPath);
                 if (saved == null)
