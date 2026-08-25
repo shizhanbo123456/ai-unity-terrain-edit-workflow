@@ -53,6 +53,7 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 | `workflow.prefab.edit` | `path`, `target`, `position/rotation/scale/move/rotate/zoom/quaternion` | 编辑 Prefab 资产内部物体 Transform（直接保存资产；`target` 可空=根节点） |
 | `workflow.prefab.remove` | `path`, `target` | 从 Prefab 资产内部删除物体（直接保存资产） |
 | `workflow.prefab.instantiate` | `path`, `output`, `target`, `position/rotation/scale` | 在 Prefab 资产内部实例化另一个 Prefab 为子物体（直接保存资产） |
+| `workflow.prefab.fix_pivot` | `path` | 计算 Prefab 所有 mesh 变换后的合并 Bounds，将「中心正下方」(center.x, min.y, center.z) 平移到原点 (0,0,0)；整体平移直接子物体、根节点保持零变换（阶段 0 pivot 修正专用） |
 
 其余原生命令只处理生成资产、派生数据、校验或执行构建，不用于修改工作流配置。Python CLI 只暴露 `workflow.configure` 与 `workflow.run`；完整结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。
 

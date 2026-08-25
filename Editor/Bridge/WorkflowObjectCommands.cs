@@ -15,6 +15,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
     ///   - workflow.prefab.edit         编辑 Prefab 资产内部某个物体的 Transform 常用字段
     ///   - workflow.prefab.remove       从 Prefab 资产内部删除某个物体
     ///   - workflow.prefab.instantiate  在 Prefab 资产内部实例化另一个 Prefab 为子物体
+    ///   - workflow.prefab.fix_pivot    计算 Prefab 所有 mesh 变换后的合并 Bounds，把「中心正下方」平移到原点
     ///
     /// 复用 bridge 现有 BridgeArgs 字段（path/target/output/position/rotation/scale/move/rotate/zoom/quaternion/name），
     /// 不修改 unity-python-bridge 仓库；删除本工作流目录即可完整移除这些命令。
@@ -28,6 +29,23 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public bool valid;
         public string[] errors;
         public string json;
+    }
+
+    /// <summary>workflow.prefab.fix_pivot 的返回：修正前后合并 Bounds（center/size）与平移量 offset。</summary>
+    [Serializable]
+    public sealed class FixPivotResult
+    {
+        public string operation;
+        public string path;
+        public string message;
+        public bool valid;
+        public string[] errors;
+        public int movedChildCount;
+        public float[] beforeCenter;
+        public float[] beforeSize;
+        public float[] afterCenter;
+        public float[] afterSize;
+        public float[] offset;
     }
 
     public static class WorkflowObjectCommands
@@ -181,6 +199,100 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 PrefabUtility.SaveAsPrefabAsset(contentsRoot, prefabPath);
                 return Result("prefab.instantiate", BuildChildPath(contentsRoot.transform, instance.transform),
                     "instantiated " + childPath, null);
+            }
+            finally
+            {
+                if (contentsRoot != null)
+                    PrefabUtility.UnloadPrefabContents(contentsRoot);
+            }
+        }
+
+        // ---------- workflow.prefab.fix_pivot ----------
+
+        /// <summary>
+        /// 计算 Prefab 内所有 Renderer 变换后的合并 Bounds，并将包围盒「中心正下方」
+        /// （center.x, min.y, center.z）平移到原点 (0,0,0)：整体平移所有直接子物体，
+        /// 使模型底部中心落在根节点原点上。根节点保持零变换（符合阶段 0 规范，mesh 修正一律作用在子物体上）。
+        /// 参数: path = Prefab 资产路径（必填）。
+        /// 返回修正前后的合并 Bounds 与平移量 offset。
+        /// </summary>
+        [BridgeCommand("workflow.prefab.fix_pivot",
+            "计算 Prefab 所有 mesh 变换后的合并 Bounds，并将中心正下方 (center.x, min.y, center.z) 平移到原点 (0,0,0)。参数: path=Prefab资产路径(必填)")]
+        public static object FixPivot(BridgeContext ctx, BridgeArgs args)
+        {
+            string prefabPath = NormalizeAssetPath(args.path);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null) throw new ArgumentException("找不到 Prefab: " + prefabPath);
+
+            GameObject contentsRoot = null;
+            try
+            {
+                contentsRoot = PrefabUtility.LoadPrefabContents(prefabPath);
+                Transform rootT = contentsRoot.transform;
+
+                // Billboard 面片（_Billboard）不参与模型 Bounds 计算，需跳过其整个子树。
+                Transform billboardT = rootT.Find("_Billboard");
+                Renderer[] renderers = contentsRoot.GetComponentsInChildren<Renderer>(true);
+
+                bool hasBounds = false;
+                Bounds combined = new Bounds();
+                foreach (Renderer r in renderers)
+                {
+                    if (billboardT != null && (r.transform == billboardT || r.transform.IsChildOf(billboardT)))
+                        continue;
+                    if (r.bounds.size.sqrMagnitude <= 0f) continue; // 跳过无有效网格的渲染器
+                    if (!hasBounds) { combined = r.bounds; hasBounds = true; }
+                    else combined.Encapsulate(r.bounds);
+                }
+                if (!hasBounds)
+                    throw new InvalidOperationException("Prefab 内没有任何带有效网格的 Renderer，无法计算 Bounds: " + prefabPath);
+
+                if (rootT.childCount == 0)
+                    throw new InvalidOperationException(
+                        "Prefab 根节点下没有直接子物体（mesh 直接挂在根节点上时无法在不移动根节点的情况下平移），请手动处理: " + prefabPath);
+
+                // 根节点自身带 Renderer 时，平移子物体无法修正根上的 mesh，直接报错避免静默产出错误 pivot。
+                if (rootT.GetComponent<Renderer>() != null)
+                    throw new InvalidOperationException(
+                        "Prefab 根节点自身挂有 Renderer，平移子物体无法修正根上的 mesh，请手动处理: " + prefabPath);
+
+                Vector3 beforeCenter = combined.center;
+                Vector3 beforeSize = combined.size;
+
+                // 目标：中心正下方 (center.x, min.y, center.z) -> (0,0,0)
+                Vector3 offset = new Vector3(-combined.center.x, -combined.min.y, -combined.center.z);
+                for (int i = 0; i < rootT.childCount; i++)
+                    rootT.GetChild(i).localPosition += offset;
+
+                // 平移后重算合并 Bounds 供返回校验（此时尚未保存，contentsRoot 仍在内存中）。
+                Renderer[] renderersAfter = contentsRoot.GetComponentsInChildren<Renderer>(true);
+                bool hasAfter = false;
+                Bounds after = new Bounds();
+                foreach (Renderer r in renderersAfter)
+                {
+                    if (billboardT != null && (r.transform == billboardT || r.transform.IsChildOf(billboardT)))
+                        continue;
+                    if (r.bounds.size.sqrMagnitude <= 0f) continue;
+                    if (!hasAfter) { after = r.bounds; hasAfter = true; }
+                    else after.Encapsulate(r.bounds);
+                }
+
+                PrefabUtility.SaveAsPrefabAsset(contentsRoot, prefabPath);
+
+                return new FixPivotResult
+                {
+                    operation = "prefab.fix_pivot",
+                    path = prefabPath,
+                    message = $"offset=({offset.x:F4}, {offset.y:F4}, {offset.z:F4})",
+                    valid = true,
+                    errors = Array.Empty<string>(),
+                    movedChildCount = rootT.childCount,
+                    beforeCenter = new[] { beforeCenter.x, beforeCenter.y, beforeCenter.z },
+                    beforeSize = new[] { beforeSize.x, beforeSize.y, beforeSize.z },
+                    afterCenter = new[] { after.center.x, after.center.y, after.center.z },
+                    afterSize = new[] { after.size.x, after.size.y, after.size.z },
+                    offset = new[] { offset.x, offset.y, offset.z },
+                };
             }
             finally
             {
