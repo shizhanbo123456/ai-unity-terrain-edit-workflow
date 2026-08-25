@@ -37,7 +37,7 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.4**（
 | 主配置 | `TerrainPaintProjectSO`（ScriptableObject）：地形工作流的总配置，聚合素材池 / 规则 / 邻接组 / mapResolution / MapData 接口，是编辑器窗口与 `TerrainBuilder` 的单一数据入口。 |
 | 层级配置 | `LayerConfigSO`（ScriptableObject）：单个语义层的颜色、名称、高度范围、道路参数与自然/道路 TerrainLayer 权重；数量 2~16，从属于主配置。 |
 | 生成组 | 散布、摆件和定点阶段各自的 ScriptableObject 规则资产：`ScatterConfigSO` / `PropConfigSO` / `FixedPointConfigSO`。 |
-| 备用预制体库 | `Generated/Prefabs/` 中所有可被散布、摆件和定点模块引用的 Prefab。根节点为标准 Transform 并挂载 `PrefabStructureInfo`；其子物体可自由调整位置/方向/缩放，也可增删并拼合多个对象。 |
+| 备用预制体库 | `Generated/Prefabs/` 中所有可被散布、摆件和定点模块引用的 Prefab。根节点为标准 Transform 并挂载 `PrefabStructureInfo`；**标准位置为模型合并 Bounds 的「中心正下方」(center.x, min.y, center.z) 落在根节点原点 (0,0,0)**（见阶段 0）；其子物体可自由调整位置/方向/缩放，也可增删并拼合多个对象。 |
 
 ## 完整生成逻辑伪代码
 
@@ -365,7 +365,7 @@ function WorkflowConfig.DrawMapDataPreview():
 
 | 阶段 | 输入 | 处理 | 产出（载体） | 状态 |
 |---|---|---|---|---|
-| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 将源 Prefab 生成为工具内部备用 Prefab，再按需调整子物体、方向与组合，并更新 Bounds/Billboard | TerrainLayer 素材池 + `Generated/Prefabs` 备用库 | **[已完成]** |
+| 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 将源 Prefab 生成为工具内部备用 Prefab（**创建时自动标准化：模型合并 Bounds 的「中心正下方」对齐根节点原点**），再按需调整子物体、方向与组合，并更新 Bounds/Billboard | TerrainLayer 素材池 + `Generated/Prefabs` 备用库 | **[已完成]** |
 | 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
 | 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
@@ -382,9 +382,10 @@ function WorkflowConfig.DrawMapDataPreview():
 - **备用预制体规范**（供散布、摆件、定点共同使用）：
   - 三个摆放模块不得直接引用源 Prefab 或工具目录外的任何 Prefab，必须先生成到 `Generated/Prefabs/`。
   - 备用 Prefab 根节点始终保持 position `(0,0,0)`、rotation identity、scale `(1,1,1)`，并挂载 `PrefabStructureInfo`。
+  - **标准位置（中心正下方在原点）**：备用 Prefab 的内容应整体平移，使**全部 mesh 变换后的合并 Bounds 之「中心正下方」点 (center.x, min.y, center.z) 落在根节点原点 (0,0,0)**——即模型底部中心就是根节点位置：根节点落在哪里，模型底部就落在哪里。创建时由 `BuildCandidatePrefab` **自动执行**（`StandardizePivotToOrigin`，仅在创建时一次，创建后不再修改其中物体的位置）；对已存在的备用 Prefab 可用 `workflow.prefab.fix_pivot` 按同一规则手动修正（幂等，已标准化的调用不会产生位移）。
   - 根节点下的内容是可编辑的：允许调整子物体位置、方向、缩放，允许增加、删除子物体并拼合多个对象。
-  - 再次通过处理工具导入同名备用 Prefab时，只更新结构信息和 Billboard，不覆盖人工修改的内容。
-  - **添加备选 Prefab 后必须确认内容正确**：打开 `Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/` 下对应的备用 Prefab 检查模型。部分源 Prefab 的模型**中心正下方不在原点**（模型自身 pivot 不在底部中心，或在场景中摆放时底部与原点有偏移），此时需要修正子物体的变换，使模型按预期放置在原点（通常让模型底部中心落在根节点原点上）；确认无误后再更新 Bounds / 生成 Billboard。根节点本身不可移动（保持零变换），修正一律作用在子物体上。
+  - 再次通过处理工具导入同名备用 Prefab时，只更新结构信息和 Billboard，不覆盖人工修改的内容（**创建时自动标准化只在首次创建执行，已存在的备用 Prefab 不会被再次移动**）。
+  - **添加备选 Prefab 后必须确认内容正确**：打开 `Assets/ai-unity-terrain-edit-workflow/Generated/Prefabs/` 下对应的备用 Prefab 检查模型。**pivot 已由创建时自动标准化处理**（见上），一般无需手工修正；若因特殊原因仍需调整（如源 Prefab 形态特殊、或人工拼合后需要重新对齐），可修正子物体的变换使模型按预期放置在原点（通常让模型底部中心落在根节点原点上），或直接调用 `workflow.prefab.fix_pivot` 自动对齐；确认无误后再更新 Bounds / 生成 Billboard。根节点本身不可移动（保持零变换），修正一律作用在子物体上。
   - **跨项目共享（处理一次、全局复用）**：备用 Prefab 是**工具级资产**（位于工具根 `Generated/Prefabs/`），**可被任意主配置对应的工具项目（`TerrainGeneratorConfigs/` 下任意项目）引用**；同一套美术资源（模型 / 贴图）只需处理一次，各项目通过各自生成组引用复用，避免同一模型内容在多个项目中被重复处理。阶段 0 是工具级的一次性处理，新建主配置项目不需要重新处理已处理过的素材。
   - **处理后登记视觉笔记（ModelFeature.md，本地文件）**：处理备用 Prefab 并**查看生成后的效果**（打开 Prefab / 场景视图检查模型落位，或查看模型截图）后，在工具根目录 `ModelFeature.md` 记录该备用 Prefab 的**大致视觉效果**（外形 / 轮廓 / 朝向倾向等**定性**描述），**不记录具体参数等定量内容**（如尺寸数值、数值范围）；**文件不存在则创建**。该文件是**本地笔记**，已被 `.gitignore` 忽略、不随仓库分发，供后续散布 / 摆件 / 定点摆放时参考。
 - 摆件生成组使用独立的 `PropConfigSO`，不再复用简单对象列表容器。
@@ -420,7 +421,7 @@ function WorkflowConfig.DrawMapDataPreview():
 
 **物体资源规范**（与阶段 0 一致）：
 - 生成组只能引用 `Generated/Prefabs/` 中由处理工具创建的备用 Prefab，不能直接引用其它 Prefab。
-- 备用 Prefab 根节点保持标准 Transform 并挂载 `PrefabStructureInfo`；子物体允许任意变换，也允许拼合多个对象。
+- 备用 Prefab 根节点保持标准 Transform 并挂载 `PrefabStructureInfo`；**标准位置：mesh 合并 Bounds 的「中心正下方」(center.x, min.y, center.z) 落在原点 (0,0,0)**（创建时自动执行，见阶段 0）；子物体允许任意变换，也允许拼合多个对象。
 - 备用 Prefab 内容由用户维护；重复处理不会覆盖内容，Bounds 和 Billboard 可在修改后批量刷新。
 
 **摆件生成组（`PropConfigSO`）参数**：
