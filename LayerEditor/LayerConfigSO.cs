@@ -34,8 +34,9 @@ namespace AiTerrainWorkflow.LayerEditor
         public bool generateRoad = true;
         [Tooltip("B 胶囊半径（世界距离）")]
         public float roadWidth = 2f;
-        [Tooltip("G 胶囊半径 = 占用/间隔缓冲（世界距离）")]
-        public float roadSpacingMin = 4f;
+        [Range(0f, 1f)]
+        [Tooltip("抗卷曲系数（0~1）：实际 G 禁区滞后距离 = antiCurl × stepWorld × 2。默认 0.5 = 1 倍步距；<0.25 抗卷曲效果较差，>0.75 路径生成较难")]
+        public float antiCurl = 0.5f;
         [Tooltip("烘焙时对 R 的重映射曲线（不作用于 B）")]
         public AnimationCurve roadFinalRemap = AnimationCurve.Linear(0f, 0f, 1f, 1f);
 

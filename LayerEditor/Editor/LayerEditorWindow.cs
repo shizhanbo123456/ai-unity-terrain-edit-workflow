@@ -569,7 +569,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.Info);
 
             EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField("目标 Terrain（仅本次窗口会话，不保存到配置）", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("目标 Terrain（仅本次窗口会话，不保存到配置；烘焙/计算/应用均需要）", EditorStyles.boldLabel);
             _terrainField = (Terrain)EditorGUILayout.ObjectField(
                 "Terrain", _terrainField, typeof(Terrain), true);
 
@@ -1062,11 +1062,9 @@ namespace AiTerrainWorkflow.LayerEditor
             cfg.startCoverStopSamples = Mathf.Max(1, EditorGUILayout.IntField("Start Cover Stop Samples", cfg.startCoverStopSamples));
             cfg.walkSeed = EditorGUILayout.IntField("Walk Seed", cfg.walkSeed);
             cfg.maxStepsPerPath = Mathf.Max(1, EditorGUILayout.IntField("Max Steps Per Path", cfg.maxStepsPerPath));
-            cfg.gApplySpacing = Mathf.Max(0.01f, EditorGUILayout.FloatField("G Apply Spacing / 防卷曲 (m)", cfg.gApplySpacing));
+            // gApplySpacing 已移除：新防卷曲逻辑按"滞后 2 步"逐点盖胶囊，不再需要盖章间距阈值。
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
             cfg.textureSmoothingRadius = Mathf.Max(0, EditorGUILayout.IntField("贴图平滑半径 (alphamap 像素)", cfg.textureSmoothingRadius));
-            cfg.worldPerPixel = Mathf.Max(0.001f,
-                EditorGUILayout.FloatField("预览比例 (m/px)", cfg.worldPerPixel));
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("全局贴图种子（value-noise）", EditorStyles.boldLabel);
@@ -1114,7 +1112,12 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.LabelField("道路生成参数", EditorStyles.boldLabel);
             layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
             layer.roadWidth = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Width (m)", layer.roadWidth));
-            layer.roadSpacingMin = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Spacing Min (m)", layer.roadSpacingMin));
+            layer.antiCurl = EditorGUILayout.Slider("抗卷曲系数 Anti-Curl (0~1)", layer.antiCurl, 0f, 1f);
+            EditorGUILayout.LabelField("实际禁区滞后距离 = 系数 × 步距 × 2", EditorStyles.miniLabel);
+            if (layer.antiCurl < 0.25f)
+                EditorGUILayout.HelpBox("抗卷曲效果较差：禁区滞后距离 < 0.5×步距，路网可能卷曲/重叠", MessageType.Warning);
+            else if (layer.antiCurl > 0.75f)
+                EditorGUILayout.HelpBox("路径生成较难：禁区滞后距离 > 1.5×步距，游走者可用空间变小", MessageType.Warning);
             layer.roadFinalRemap = EditorGUILayout.CurveField("Road Final Remap", layer.roadFinalRemap);
             EditorGUILayout.EndVertical();
 
@@ -1199,6 +1202,11 @@ namespace AiTerrainWorkflow.LayerEditor
                 EditorUtility.DisplayDialog("烘焙失败", "配置中没有层级。", "确定");
                 return;
             }
+            if (_terrainField == null)
+            {
+                EditorUtility.DisplayDialog("烘焙失败", "烘焙高度需要目标 Terrain：请到「应用」页签选择 Terrain。", "确定");
+                return;
+            }
 
             int w = _map.Width;
             int h = _map.Height;
@@ -1209,7 +1217,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 _layerIdsCache = ids;
             }
 
-            var data = TerrainRoadGen.BakeHeightData(_project, ids, w, h);
+            var data = TerrainRoadGen.BakeHeightData(_project, ids, w, h, TerrainRoadGen.PixelWorldSize(_terrainField, w, h));
             if (data == null)
             {
                 EditorUtility.DisplayDialog("烘焙失败", "高度图生成失败，请查看 Console 日志。", "确定");
@@ -1515,7 +1523,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.HelpBox(
                 "TerrainLayer 池、贴图种子与层级权重请在上方「全局配置」「层级配置」页签中编辑。\n" +
-                "本页签仅负责距离场 + 路网计算。",
+                "本页签仅负责距离场 + 路网计算。计算与烘焙（height/distance/occupancy/road/offRoad）\n" +
+                "按目标 Terrain 实际尺寸换算世界尺度：请先在「应用」页签选择 Terrain。",
                 MessageType.Info);
 
             EditorGUILayout.Space(6);
@@ -1630,8 +1639,15 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
+            if (_terrainField == null)
+            {
+                EditorUtility.DisplayDialog("计算失败", "距离场/路网计算需要目标 Terrain：请到「应用」页签选择 Terrain。", "确定");
+                return;
+            }
+
             int w = _map.Width;
             int h = _map.Height;
+            Vector2 pws = TerrainRoadGen.PixelWorldSize(_terrainField, w, h);
             int[] ids = _layerIdsCache;
             if (ids == null || ids.Length != w * h)
             {
@@ -1639,7 +1655,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 _layerIdsCache = ids;
             }
 
-            var tex = TerrainRoadGen.ComputeAll(_project, ids, w, h, out var rArr, out var gArr, out var bArr);
+            var tex = TerrainRoadGen.ComputeAll(_project, ids, w, h, pws, out var rArr, out var gArr, out var bArr);
             if (tex == null)
             {
                 Debug.LogError("[Terrain Paint Workflow] 计算失败（详见上方错误日志），已中断。");
@@ -1656,7 +1672,7 @@ namespace AiTerrainWorkflow.LayerEditor
             _project.WriteMap("occupancy", CsvArrayCodec.ToJagged(gArr, w, h));
             _project.WriteMap("road", CsvArrayCodec.ToJagged(bArr, w, h));
             _project.WriteMap("offRoad", CsvArrayCodec.ToJagged(
-                TerrainRoadGen.ComputeOffRoad(ids, bArr, w, h, _project.config.worldPerPixel), w, h));
+                TerrainRoadGen.ComputeOffRoad(ids, bArr, w, h, pws), w, h));
             _project.RefreshMapDataRefs(true);
             RebuildMapDataPreviews();
             EditorUtility.SetDirty(_project);

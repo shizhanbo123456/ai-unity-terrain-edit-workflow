@@ -168,8 +168,10 @@ function ApplyHeight(session):
 ### 4. 距离场、路网与地形贴图（`ApplyTexture`，已实现）
 
 ```text
-function CalculateRoadMapData(project, layerMap):
+function CalculateRoadMapData(project, layerMap, terrain):
     layerIds = FlattenAndRoundToInt(layerMap)
+    w, h = mapSize
+    pixelWorldSize = TerrainRoadGen.PixelWorldSize(terrain, w, h)
     validate no layer appears in multiple adjacencyGroups
     groups = TerrainRoadGen.GroupLayers(project)
 
@@ -178,17 +180,16 @@ function CalculateRoadMapData(project, layerMap):
     road      = zeros(mapSize)
 
     for each group in groups:
-        groupDistance = TerrainRoadGen.ComputeR(layerIds, group)
+        groupDistance = TerrainRoadGen.ComputeR(layerIds, w, h, group, pixelWorldSize, out _)
         TerrainRoadGen.GenerateRoads(
-            layerIds, groupDistance, group,
-            project.config, project.layers,
+            layerIds, groupDistance, w, h, group,
+            project.config, project.layers, pixelWorldSize,
             output groupOccupancy, output groupRoad)
         merge groupDistance into distance
         merge groupOccupancy into occupancy
         merge groupRoad into road
 
-    offRoad = TerrainRoadGen.ComputeOffRoad(
-        layerIds, road, PixelWorldSize(terrain, mapSize))
+    offRoad = TerrainRoadGen.ComputeOffRoad(layerIds, road, w, h, pixelWorldSize)
     return distance, occupancy, road, offRoad
 
 function EnsureRoadMapData(session):
@@ -361,7 +362,7 @@ function WorkflowConfig.DrawMapDataPreview():
 - **像素中心对齐 Terrain 边界**：首个像素中心（数组索引 `(0,0)`）对应 Terrain 局部坐标 `(0,0)`，末个像素中心（数组索引 `(width-1,height-1)`）对应 Terrain 局部坐标 `(terrainSize.x,terrainSize.z)`。口头所称 128×128 工作流的 `(128,128)` 表示其右上边界；实际数组末像素索引为 `(127,127)`。
 - **正向映射**：`localX = pixelX / (width - 1) * terrainSize.x`，`localZ = pixelZ / (height - 1) * terrainSize.z`；世界坐标还需加上 `terrain.transform.position`。反向映射为 `pixelX = localX / terrainSize.x * (width - 1)`、`pixelZ = localZ / terrainSize.z * (height - 1)`。
 - **边缘外扩半像素**：由于首末像素的中心落在 Terrain 两侧边界，像素图的实际覆盖范围会在 Terrain 四周各超出半个像素间距。这样 Terrain 边缘仍由完整的最外圈像素覆盖，可避免边缘权重、掩码或插值表现异常。反向采样时，离散数据（如 `layerMap` / `road`）取最近像素，连续数据（如 `height` / `distance` / `offRoad`）使用双线性插值；超出范围的采样钳制到最外圈像素。
-- **单位约定**：只有区域编辑的操作点和画笔半径使用像素。其余距离参数与距离结果统一使用世界单位。给定 Terrain 后，像素中心间距分别为 `worldPerPixelX = terrainSize.x / (width - 1)`、`worldPerPixelZ = terrainSize.z / (height - 1)`；带两轴系数的欧氏距离变换直接输出世界距离。`TerrainPaintConfig.worldPerPixel` 仅用于编辑器尚未选择目标 Terrain 时的等比例预览，实际 Build 不使用该值。
+- **单位约定**：只有区域编辑的操作点和画笔半径使用像素。其余距离参数与距离结果统一使用世界单位。给定 Terrain 后，像素中心间距分别为 `pixelWorldSizeX = terrainSize.x / (width - 1)`、`pixelWorldSizeZ = terrainSize.z / (height - 1)`（`TerrainRoadGen.PixelWorldSize(terrain, w, h)`）；带两轴系数的欧氏距离变换直接输出世界距离。除 `layerMap` 外的所有 MapData（`height/distance/occupancy/road/offRoad`）烘焙都必须指定目标 Terrain 并按其实尺寸计算：CLI（`workflow.bake` / `workflow.run`）自动场景搜索（`terrain` 为空取第一个），编辑器窗口在「应用」页签手动选择。不存在独立的"预览尺度"。
 - **示例**：128×128 的 map 映射到 1024×1024 的 Terrain 时，索引 `0` 的像素中心对应局部坐标 `0`，索引 `127` 的像素中心对应 `1024`；相邻中心间距为 `1024 / 127 ≈ 8.063m`，单轴实际覆盖约为 `[-4.0315, 1028.0315]`。
 - 例：`distance`、`offRoad`、道路宽度/间距、散布离路范围和摆件间距全部是世界单位。
 

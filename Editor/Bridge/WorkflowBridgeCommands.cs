@@ -33,10 +33,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public int startCoverStopSamples = 8;
         public int walkSeed;
         public int maxStepsPerPath = 256;
-        public float gApplySpacing = 3f;
         public float noiseScale = 1f;
         public int textureSmoothingRadius;
-        public float worldPerPixel = 0.4f;
     }
     [Serializable]
     public sealed class LayerSpec
@@ -47,7 +45,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public float[] heightRange;
         public bool generateRoad = true;
         public float roadWidth = 2f;
-        public float roadSpacingMin = 4f;
+        public float antiCurl = 0.5f;
         public CurveKeySpec[] roadFinalRemap;
         public int[] naturalWeights;
         public int[] roadWeights;
@@ -200,11 +198,12 @@ namespace AiTerrainWorkflow.Editor.Bridge
             return Result("prefab.update_billboards", null, "updated", count);
         }
 
-        [BridgeCommand("workflow.bake", "重建 layerMap，并烘焙 height/distance/occupancy/road/offRoad。参数: path=项目")]
+        [BridgeCommand("workflow.bake", "重建 layerMap，并烘焙 height/distance/occupancy/road/offRoad。参数: path=项目, terrain=场景Terrain名(空=第一个)")]
         public static object Bake(BridgeContext context, BridgeArgs args)
         {
             TerrainPaintProjectSO project = LoadProject(args.path);
-            BakeAll(project);
+            Terrain terrain = FindTerrain(args.terrain); // 烘焙需真实 Terrain：直接场景搜索（按名或第一个）
+            BakeAll(project, terrain);
             SaveProject(project);
             return Result("bake", AssetDatabase.GetAssetPath(project), "baked", 5);
         }
@@ -247,12 +246,12 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 foreach (PrefabSpec spec in manifest.prefabs) BuildPrefabSpec(spec);
             // Generation groups may reference processed prefabs created above.
             ApplyManifest(project, manifest);
-            if (manifest.bake) BakeAll(project); else BakeArea(project);
+            Terrain terrain = FindTerrain(manifest.terrain); // bake 与 build 均需真实 Terrain：场景搜索
+            if (manifest.bake) BakeAll(project, terrain); else BakeArea(project);
             SaveProject(project);
             List<string> errors = ValidateProject(project);
             if (errors.Count > 0)
                 return new WorkflowBridgeResult { operation = "run", projectPath = AssetDatabase.GetAssetPath(project), valid = false, errors = errors.ToArray(), count = errors.Count, message = "validation failed" };
-            Terrain terrain = FindTerrain(manifest.terrain);
             TerrainBuilder builder = terrain.GetComponent<TerrainBuilder>() ?? terrain.gameObject.AddComponent<TerrainBuilder>();
             builder.Build(project, terrain, ParseEnum(manifest.applyThrough, TerrainWorkflowStage.FixedPointEdit));
             EditorUtility.SetDirty(terrain.gameObject);
@@ -342,10 +341,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     startCoverStopSamples = cfg.startCoverStopSamples,
                     walkSeed = cfg.walkSeed,
                     maxStepsPerPath = cfg.maxStepsPerPath,
-                    gApplySpacing = cfg.gApplySpacing,
                     noiseScale = cfg.noiseScale,
                     textureSmoothingRadius = cfg.textureSmoothingRadius,
-                    worldPerPixel = cfg.worldPerPixel,
                 },
                 naturalSeed = project.naturalSeed,
                 roadSeed = project.roadSeed,
@@ -391,7 +388,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     heightRange = layer != null ? new[] { layer.heightRange.x, layer.heightRange.y } : new[] { 0f, 1f },
                     generateRoad = layer != null && layer.generateRoad,
                     roadWidth = layer != null ? layer.roadWidth : 0f,
-                    roadSpacingMin = layer != null ? layer.roadSpacingMin : 0f,
+                    antiCurl = layer != null ? layer.antiCurl : 0.5f,
                     roadFinalRemap = ExportCurve(layer != null ? layer.roadFinalRemap : null),
                     naturalWeights = layer != null ? layer.naturalLayerWeights.ToArray() : Array.Empty<int>(),
                     roadWeights = layer != null ? layer.roadLayerWeights.ToArray() : Array.Empty<int>(),
@@ -493,9 +490,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
             target.roadStep = source.roadStep; target.walkStartTries = source.walkStartTries;
             target.walkCandidateCount = source.walkCandidateCount; target.startCoverStopSamples = source.startCoverStopSamples;
             target.walkSeed = source.walkSeed; target.maxStepsPerPath = source.maxStepsPerPath;
-            target.gApplySpacing = source.gApplySpacing; target.noiseScale = source.noiseScale;
+            target.noiseScale = source.noiseScale;
             target.textureSmoothingRadius = Mathf.Max(0, source.textureSmoothingRadius);
-            target.worldPerPixel = source.worldPerPixel;
         }
 
         private static void ApplyLayers(TerrainPaintProjectSO project, LayerSpec[] specs)
@@ -508,7 +504,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 if (!string.IsNullOrWhiteSpace(spec.name)) layer.layerName = spec.name;
                 if (spec.index > 0 && spec.color?.Length >= 4) layer.color = new Color(spec.color[0], spec.color[1], spec.color[2], spec.color[3]);
                 if (spec.heightRange?.Length >= 2) layer.heightRange = new Vector2(spec.heightRange[0], spec.heightRange[1]);
-                layer.generateRoad = spec.generateRoad; layer.roadWidth = spec.roadWidth; layer.roadSpacingMin = spec.roadSpacingMin;
+                layer.generateRoad = spec.generateRoad; layer.roadWidth = spec.roadWidth; layer.antiCurl = spec.antiCurl;
                 layer.roadFinalRemap = ToCurve(spec.roadFinalRemap);
                 if (spec.naturalWeights != null) layer.naturalLayerWeights = new List<int>(spec.naturalWeights);
                 if (spec.roadWeights != null) layer.roadLayerWeights = new List<int>(spec.roadWeights);
@@ -621,16 +617,18 @@ namespace AiTerrainWorkflow.Editor.Bridge
             UnityEngine.Object.DestroyImmediate(map.Texture);
         }
 
-        private static void BakeAll(TerrainPaintProjectSO project)
+        private static void BakeAll(TerrainPaintProjectSO project, Terrain terrain)
         {
             BakeArea(project);
             float[][] layerMap = project.ReadMap("layerMap"); int h = layerMap.Length, w = layerMap[0].Length;
             int[] ids = new int[w * h]; for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) ids[y * w + x] = Mathf.RoundToInt(layerMap[y][x]);
-            project.WriteMap("height", TerrainRoadGen.BakeHeightData(project, ids, w, h));
-            Texture2D preview = TerrainRoadGen.ComputeAll(project, ids, w, h, out var r, out var g, out var b);
+            // 除 layerMap 外的全部 MapData 都按真实 Terrain 尺寸换算像素世界间距
+            Vector2 pws = TerrainRoadGen.PixelWorldSize(terrain, w, h);
+            project.WriteMap("height", TerrainRoadGen.BakeHeightData(project, ids, w, h, pws));
+            Texture2D preview = TerrainRoadGen.ComputeAll(project, ids, w, h, pws, out var r, out var g, out var b);
             if (preview == null) throw new InvalidOperationException("道路数据计算失败"); UnityEngine.Object.DestroyImmediate(preview);
             project.WriteMap("distance", CsvArrayCodec.ToJagged(r, w, h)); project.WriteMap("occupancy", CsvArrayCodec.ToJagged(g, w, h)); project.WriteMap("road", CsvArrayCodec.ToJagged(b, w, h));
-            project.WriteMap("offRoad", CsvArrayCodec.ToJagged(TerrainRoadGen.ComputeOffRoad(ids, b, w, h, project.config.worldPerPixel), w, h));
+            project.WriteMap("offRoad", CsvArrayCodec.ToJagged(TerrainRoadGen.ComputeOffRoad(ids, b, w, h, pws), w, h));
             project.RefreshMapDataRefs(true);
         }
 

@@ -25,18 +25,12 @@ namespace AiTerrainWorkflow.LayerEditor
         public int walkSeed = 0;
         [Tooltip("单条路径步数硬上限（安全护栏）")]
         public int maxStepsPerPath = 256;
-        [Tooltip("防卷曲距离 = G 应用间距阈值（世界距离），默认 3m")]
-        public float gApplySpacing = 3f;
 
         [Header("贴图混合")]
         [Tooltip("value-noise 加权混合的空间频率（世界距离）")]
         public float noiseScale = 1f;
         [Tooltip("最终 alphamap 的五点均值平滑采样半径（alphamap 像素）；0 表示关闭")]
         [Min(0)] public int textureSmoothingRadius = 0;
-
-        [Header("坐标换算")]
-        [Tooltip("仅用于编辑器无目标 Terrain 时的道路预览比例（米/像素）；实际 Build 会由目标 Terrain 尺寸与 Map 分辨率计算 X/Z 两轴比例")]
-        public float worldPerPixel = 0.4f;
     }
 
     /// <summary>

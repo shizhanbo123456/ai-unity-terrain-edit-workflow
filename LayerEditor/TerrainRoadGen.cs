@@ -85,15 +85,6 @@ namespace AiTerrainWorkflow.LayerEditor
 
         // ---------- 距离场（二值欧氏距离变换） ----------
 
-        /// <summary>
-        /// 计算组合层级的 R 通道。无 pixelWorldSize 的兼容重载以 1×1 世界单位像素计算；
-        /// 构建端应使用 Vector2 重载，得到区域内到最近边界的世界空间欧氏距离。
-        /// </summary>
-        public static float[] ComputeR(int[] layerIds, int w, int h, List<int> group, out float maxD)
-        {
-            return ComputeR(layerIds, w, h, group, Vector2.one, out maxD);
-        }
-
         /// <summary>按像素中心在世界 X/Z 的实际间距计算世界空间欧氏距离场。</summary>
         public static float[] ComputeR(
             int[] layerIds, int w, int h, List<int> group, Vector2 pixelWorldSize, out float maxD)
@@ -148,12 +139,6 @@ namespace AiTerrainWorkflow.LayerEditor
         /// 非道路像素到最近道路像素的世界空间欧氏距离；道路像素=0，拼合区域外=0。
         /// 散布生成时按生成组的 offRoadDistanceRange 过滤。
         /// </summary>
-        public static float[] ComputeOffRoad(int[] layerIds, float[] road, int w, int h, float worldPerPixel)
-        {
-            float spacing = worldPerPixel > 0f ? worldPerPixel : 1f;
-            return ComputeOffRoad(layerIds, road, w, h, new Vector2(spacing, spacing));
-        }
-
         public static float[] ComputeOffRoad(
             int[] layerIds, float[] road, int w, int h, Vector2 pixelWorldSize)
         {
@@ -248,14 +233,6 @@ namespace AiTerrainWorkflow.LayerEditor
         /// 所有游走点必须与起点同组合层；候选点跨组直接跳过。
         /// </summary>
         public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
-            TerrainPaintConfig cfg, List<LayerConfigSO> layers, float worldPerPixel,
-            out float[] g, out float[] b)
-        {
-            GenerateRoads(layerIds, r, w, h, group, cfg, layers,
-                new Vector2(worldPerPixel, worldPerPixel), out g, out b);
-        }
-
-        public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
             TerrainPaintConfig cfg, List<LayerConfigSO> layers, Vector2 pixelWorldSize,
             out float[] g, out float[] b)
         {
@@ -266,7 +243,6 @@ namespace AiTerrainWorkflow.LayerEditor
             pixelWorldSize.x = Mathf.Max(0.0001f, pixelWorldSize.x);
             pixelWorldSize.y = Mathf.Max(0.0001f, pixelWorldSize.y);
             float stepWorld = Mathf.Max(Mathf.Min(pixelWorldSize.x, pixelWorldSize.y), cfg.roadStep);
-            float spacingWorld = Mathf.Max(Mathf.Min(pixelWorldSize.x, pixelWorldSize.y), cfg.gApplySpacing);
 
             var allPoints = new List<Vector2Int>();
 
@@ -279,7 +255,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     break;
 
                 var path = WalkPath(start.Value, layerIds, r, w, h, group, cfg, layers,
-                    pixelWorldSize, stepWorld, spacingWorld, rng, g);
+                    pixelWorldSize, stepWorld, rng, g);
 
                 if (path.Count > 0)
                 {
@@ -297,9 +273,9 @@ namespace AiTerrainWorkflow.LayerEditor
                     if (join.HasValue)
                     {
                         path.Add(join.Value);
-                        // 连接段 G 按防卷曲规则补画（沿途各点所在层的 roadSpacingMin）
+                        // 连接段 G 按防卷曲规则补画（沿途各点所在层的抗卷曲系数）
                         StampLineFloat(g, w, h, last, join.Value,
-                            idx => GRadiusAt(layerIds, layers, idx, spacingWorld), pixelWorldSize, 1f);
+                            idx => GRadiusAt(layerIds, layers, idx, stepWorld), pixelWorldSize, 1f);
                     }
 
                     // B：路径所有边统一画胶囊（半径 = 边所在层 roadWidth）
@@ -357,12 +333,11 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private static List<Vector2Int> WalkPath(Vector2Int start, int[] layerIds, float[] r,
             int w, int h, List<int> group, TerrainPaintConfig cfg, List<LayerConfigSO> layers,
-            Vector2 pixelWorldSize, float stepWorld, float spacingWorld,
+            Vector2 pixelWorldSize, float stepWorld,
             System.Random rng, float[] g)
         {
             var path = new List<Vector2Int> { start };
             var cur = start;
-            var anchor = start;
 
             for (int step = 0; step < cfg.maxStepsPerPath; step++)
             {
@@ -384,12 +359,21 @@ namespace AiTerrainWorkflow.LayerEditor
                 var next = WeightedPick(valid, r, w, rng);
                 path.Add(next);
 
-                // G 应用：与锚点距离超过 gApplySpacing（防卷曲距离）才批量回填 G 胶囊
-                if (DistWorld(next, anchor, pixelWorldSize) > spacingWorld)
+                // ★ 防卷曲禁区（滞后 2 步）：新点 P(i) 加入后，盖 P(i-3)→P(i-2) 的胶囊，
+                // 而不是盖到最新点 P(i) 上 —— 避免圈住游走者自身前沿导致自锁。
+                // 第 3 个点（i==2）尚无窗口 → 盖首个点 A 的圆；前 2 个点不盖。
+                // 胶囊半径 = 沿途各点所在层 antiCurl × stepWorld × 2（默认 0.5 → 1 倍步距）。
+                int i = path.Count - 1;
+                if (i >= 3)
                 {
-                    StampLineFloat(g, w, h, anchor, next,
-                        idx => GRadiusAt(layerIds, layers, idx, spacingWorld), pixelWorldSize, 1f);
-                    anchor = next;
+                    StampLineFloat(g, w, h, path[i - 3], path[i - 2],
+                        idx => GRadiusAt(layerIds, layers, idx, stepWorld), pixelWorldSize, 1f);
+                }
+                else if (i == 2)
+                {
+                    var first = path[0];
+                    StampEllipseFloat(g, w, h, first.x, first.y,
+                        GRadiusAt(layerIds, layers, first.y * w + first.x, stepWorld), pixelWorldSize, 1f);
                 }
                 cur = next;
             }
@@ -429,25 +413,6 @@ namespace AiTerrainWorkflow.LayerEditor
         }
 
         // ---------- 一键计算（多组合层） ----------
-
-        /// <summary>解析层ID并按全部组合层计算 R/G/B，返回合成 RGB 图；rOut 为真实距离值（可直接写 distance MapData）。
-        /// 若邻接组存在重复层级则报错返回 null。</summary>
-        public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds,
-            out float[] rOut, out float[] gOut, out float[] bOut)
-        {
-            int w = project.layerMap != null ? project.layerMap.width : project.mapResolution;
-            int h = project.layerMap != null ? project.layerMap.height : project.mapResolution;
-            return ComputeAll(project, layerIds, w, h, out rOut, out gOut, out bOut);
-        }
-
-        /// <summary>ComputeAll 的显式尺寸重载（不再依赖 project.layerMap 存在）。</summary>
-        public static Texture2D ComputeAll(TerrainPaintProjectSO project, int[] layerIds, int w, int h,
-            out float[] rOut, out float[] gOut, out float[] bOut)
-        {
-            float spacing = Mathf.Max(0.0001f, project.config.worldPerPixel);
-            return ComputeAll(project, layerIds, w, h, new Vector2(spacing, spacing),
-                out rOut, out gOut, out bOut);
-        }
 
         /// <summary>使用 Terrain 推导的 X/Z 像素中心间距，输出世界单位距离场。</summary>
         public static Texture2D ComputeAll(
@@ -537,18 +502,10 @@ namespace AiTerrainWorkflow.LayerEditor
         // ---------- 高度图烘焙（高度编辑子界面） ----------
 
         /// <summary>
-        /// 烘焙高度数据（float[][]）：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成
+        /// <summary>烘焙高度数据（float[][]）：逐像素按所在层的高度范围，用 Perlin 噪声在该范围内插值生成
         /// **真实高度**（单位与层 heightRange 一致），不归一化、不持久化范围。
         /// MapData 存储层直接写本方法结果到 "height" key；显示/构建时遍历数据现算 min/max。
-        /// </summary>
-        public static float[][] BakeHeightData(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
-        {
-            float previewSpacing = Mathf.Max(0.0001f, project.config.worldPerPixel);
-            return BakeHeightData(project, layerIds, w, h,
-                new Vector2(previewSpacing, previewSpacing));
-        }
-
-        /// <summary>使用像素中心的世界 X/Z 间距采样连续高度噪声。</summary>
+        /// 使用像素中心的世界 X/Z 间距采样连续高度噪声。</summary>
         public static float[][] BakeHeightData(
             TerrainPaintProjectSO project, int[] layerIds, int w, int h, Vector2 pixelWorldSize)
         {
@@ -615,45 +572,13 @@ namespace AiTerrainWorkflow.LayerEditor
                 : Vector2.zero;
         }
 
-        /// <summary>
-        /// 烘焙高度图（Texture2D，兼容旧接口）：调用 <see cref="BakeHeightData"/> 后，
-        /// 内部现算 min/max 把真实高度归一化写入 R 通道（显示语义；范围不持久化）。
-        /// 窗口已改用数据路径，本方法保留供外部/调试使用。
-        /// </summary>
-        public static Texture2D BakeHeightMap(TerrainPaintProjectSO project, int[] layerIds, int w, int h)
+        /// <summary>按 Terrain 实际 X/Z 尺寸与 Map 分辨率计算像素中心的世界间距（两轴独立）。</summary>
+        public static Vector2 PixelWorldSize(Terrain terrain, int mapW, int mapH)
         {
-            var data = BakeHeightData(project, layerIds, w, h);
-            if (data == null)
-                return null;
-
-            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
-            tex.filterMode = FilterMode.Point;
-            tex.wrapMode = TextureWrapMode.Clamp;
-
-            // 现算真实 min/max（范围由数据产生，不持久化）
-            float hmin = float.MaxValue, hmax = float.MinValue;
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++)
-                {
-                    float v = data[y][x];
-                    if (v < hmin) hmin = v;
-                    if (v > hmax) hmax = v;
-                }
-            float range = hmax - hmin;
-            if (range < 0.0001f) range = 1f;
-
-            var px = new Color32[w * h];
-            for (int y = 0; y < h; y++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    byte b = (byte)Mathf.RoundToInt(Mathf.Clamp01((data[y][x] - hmin) / range) * 255f);
-                    px[y * w + x] = new Color32(b, 0, 0, 255);
-                }
-            }
-            tex.SetPixels32(px);
-            tex.Apply();
-            return tex;
+            Vector3 size = terrain != null && terrain.terrainData != null ? terrain.terrainData.size : Vector3.one;
+            return new Vector2(
+                size.x / Mathf.Max(1, mapW - 1),
+                size.z / Mathf.Max(1, mapH - 1));
         }
 
         // ---------- 内部工具 ----------
@@ -677,12 +602,11 @@ namespace AiTerrainWorkflow.LayerEditor
             return Mathf.Sqrt(dx * dx + dy * dy);
         }
 
-        private static float GRadiusAt(int[] layerIds, List<LayerConfigSO> layers, int idx, float fallback)
+        private static float GRadiusAt(int[] layerIds, List<LayerConfigSO> layers, int idx, float stepWorld)
         {
             int id = layerIds[idx];
-            if (id < 0 || id >= layers.Count || layers[id] == null)
-                return fallback;
-            return Mathf.Max(0f, layers[id].roadSpacingMin);
+            float k = (id >= 0 && id < layers.Count && layers[id] != null) ? layers[id].antiCurl : 0.5f;
+            return Mathf.Max(0f, k * stepWorld * 2f);
         }
 
         private static float BRadiusAt(int[] layerIds, List<LayerConfigSO> layers, int idx, float fallback)
