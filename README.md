@@ -1,6 +1,6 @@
 # AiTerrainWorkflow
 
-AI 地形编辑流水线 —— 配置驱动的 AI 地形生成工具。Unity Editor 内闭环完成创作，`unity-python-bridge` 仅作按需外围工具。
+AI 地形编辑流水线 —— 配置驱动的 AI 地形生成工具。Unity Editor 内闭环完成创作；**依赖 `unity-python-bridge`（bridge 仓库），使用本仓库时默认即可使用 bridge**（见「依赖 · unity-python-bridge」小节）。
 
 C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.4**（写在 `Editor/TerrainEditWorkflowMenu.cs` 的 `Version` 常量，手动维护）。
 
@@ -15,9 +15,17 @@ C# 代码统一使用命名空间 `AiTerrainWorkflow`。当前版本 **v1.4**（
 | 单一生成核心 | 完整生成算法与 `TerrainBuilder` 均为运行时代码；编辑器预览和 Player 构建必须调用同一套公开生成入口，不维护两份算法 |
 | 编辑器只做适配 | `Editor` 目录只负责配置编辑、资产读写、撤销、按钮与可视化预览；不容纳实际地形生成规则 |
 | 构建端分离 | 运行时/编辑器都靠 **TerrainBuilder 组件** 接收主配置构建真实地形（高度/纹理/散布/摆件/定点） |
-| bridge 按需 | `unity-python-bridge` 只是按需取用的外围工具（量尺寸/截图/可选一键构建），**不参与主链路** |
+| 依赖 bridge | 本仓库**依赖** `unity-python-bridge`（bridge 仓库）：C# 命令挂在它的 `BridgeCommand` 框架上，Python CLI 使用其 `unity_bridge` 包；**使用本仓库时默认即可使用 bridge**。主创作链路在 Editor 内闭环，bridge 按需取用（量尺寸/截图/可选一键构建），**不参与主生成链路** |
 
 现已提供完整 manifest 驱动的工作流 bridge 与 Python CLI。命令行修改配置的唯一方式是编辑完整 JSON 并由 C# 整体读取；不提供单字段修改命令。模板和使用方式见 [BRIDGE.md](BRIDGE.md)。
+
+## 依赖 · unity-python-bridge（bridge 仓库）
+
+- **依赖关系**：本仓库**依赖** `unity-python-bridge`（bridge 仓库），两者需放在同一 Unity 项目的 `Assets/` 下。具体依赖点：
+  - **C# 侧**：`Editor/Bridge/WorkflowBridgeCommands.cs`、`WorkflowObjectCommands.cs` 与 `Editor/PrefabProcessingUtility.cs` 编译期引用 bridge 程序集（`UnityPythonBridge` 命名空间：`BridgeCommand` / `BridgeContext` / `BridgeArgs`）；没有 bridge 仓库，这些命令代码无法编译。
+  - **Python 侧**：`python/workflow_bridge.py` 直接 `from unity_bridge.client import UnityClient`，依赖 bridge 的 `unity_bridge` Python 包。
+- **默认可用**：把两个仓库放入同一项目并启动 bridge server（Unity 菜单 `Tools > Unity Python Bridge > Start Server`）后，本仓库的 `workflow.*` 桥接命令与 `unity_bridge` Python 客户端**开箱即用**，无需额外安装或配置。
+- **主链路无关**：上述依赖只让本仓库「拥有」bridge 能力；完整的地形生成算法（`TerrainBuilder` 等）是独立运行时代码，不在运行时调用 bridge。
 
 ## 分级精度要求（AI 搭建时参考）
 
