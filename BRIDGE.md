@@ -48,11 +48,7 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 | `workflow.validate` | `path` | 执行应用前校验 |
 | `workflow.build` | `path`, `terrain`, `type` | 构建到场景 Terrain |
 | `workflow.run` | `path`, `message` | 完整 manifest 流程 |
-| `workflow.object.instantiate` | `path`, `target`, `name`, `position/rotation/scale` | 在场景中实例化 Prefab；`path`=Prefab 资产路径，`target`=父物体路径/名称（可空=场景根） |
-| `workflow.object.destroy` | `target` | 销毁场景中的 GameObject（支持 Undo） |
-| `workflow.prefab.edit` | `path`, `target`, `position/rotation/scale/move/rotate/zoom/quaternion` | 编辑 Prefab 资产内部物体 Transform（直接保存资产；`target` 可空=根节点） |
-| `workflow.prefab.remove` | `path`, `target` | 从 Prefab 资产内部删除物体（直接保存资产） |
-| `workflow.prefab.instantiate` | `path`, `output`, `target`, `position/rotation/scale` | 在 Prefab 资产内部实例化另一个 Prefab 为子物体（直接保存资产） |
+| _（已迁移）_ | — | 场景物体实例化/销毁、Prefab 资产内部编辑这 5 条通用命令已迁移至 `unity-python-bridge`，成为其原生命令 `gameobject.instantiate` / `gameobject.destroy` / `prefab.edit` / `prefab.remove` / `prefab.instantiate`（详见 bridge 仓库 `Runtime/Commands/`） |
 | `workflow.prefab.fix_pivot` | `path` | 计算 Prefab 所有 mesh 变换后的合并 Bounds，将「中心正下方」(center.x, min.y, center.z) 平移到原点 (0,0,0)；整体平移直接子物体、根节点保持零变换（与 `prefab.build` 内部创建时自动调用的标准化逻辑同源） |
 
 其余原生命令只处理生成资产、派生数据、校验或执行构建，不用于修改工作流配置。Python CLI 只暴露 `workflow.configure` 与 `workflow.run`；完整结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。

@@ -77,7 +77,7 @@
 | 摆件 | 多组、多旋转策略混合、间距精细；结合高度做表面对齐与偏移 |
 | 定点 | 重要地标 / 建筑群**手工语义摆放**（非随机），位置有设计意图 |
 | Billboard / LOD | 按 G8 区分对象类型：树木 / 草丛等适用对象配置 Billboard（cross / linear 面片 + LOD 切换阈值）；房屋等不规则 / 细节对象 `billboardMode = None`，保持全模型渲染，**不强制面片替换** |
-| bridge 确认（bridge 可用时必须） | ① `workflow.validate` 应用前校验全过；② `view.camera` 截图 / `prefab.screenshot` 视觉确认；③ `mesh.bounds` / `prefab.bounds` 量尺寸核对比例；④ `terrain.get_heights` / `terrain.get_alphamaps` / `terrain.list_trees` 抽查真实 Terrain 数据；⑤ `scene.tree` 检查场景结构；⑥ `workflow.object.*` / `prefab.edit` 微调。<br>**bridge 不可用时**：以编辑器窗口 + Scene 视图检查替代，并在交付记录中注明「未用 bridge 确认」 |
+| bridge 确认（bridge 可用时必须） | ① `workflow.validate` 应用前校验全过；② `view.camera` 截图 / `prefab.screenshot` 视觉确认；③ `mesh.bounds` / `prefab.bounds` 量尺寸核对比例；④ `terrain.get_heights` / `terrain.get_alphamaps` / `terrain.list_trees` 抽查真实 Terrain 数据；⑤ `scene.tree` 检查场景结构；⑥ `gameobject.instantiate` / `gameobject.destroy` / `prefab.edit` / `prefab.remove` / `prefab.instantiate` 微调（均为 unity-python-bridge 原生命令）。<br>**bridge 不可用时**：以编辑器窗口 + Scene 视图检查替代，并在交付记录中注明「未用 bridge 确认」 |
 | **通过标准** | 截图验收（构图自然、无穿模、无大片空洞）；validate 全过；构建成功；prefab 覆盖率 ≥90% |
 
 ## 5. 桥接工具速查（供 L2 引用）
@@ -88,8 +88,8 @@
 |---|---|
 | `workflow.validate` | 应用前校验（L0/L1/L2 构建前必须通过） |
 | `workflow.build` / `workflow.run` | 构建真实 Terrain / 完整 manifest 流程 |
-| `workflow.object.instantiate` / `destroy` | 场景物体实例化 / 销毁（微调） |
-| `workflow.prefab.edit` / `remove` / `instantiate` | 备用 Prefab 资产内部编辑 |
+| `gameobject.instantiate` / `gameobject.destroy` | 场景物体实例化 / 销毁（微调，unity-python-bridge 原生） |
+| `prefab.edit` / `prefab.remove` / `prefab.instantiate` | 备用 Prefab 资产内部编辑（unity-python-bridge 原生） |
 
 unity-python-bridge 侧（依赖同一 Unity 项目，不参与主链路）：
 
