@@ -33,6 +33,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public int startCoverStopSamples = 8;
         public int walkSeed;
         public int maxStepsPerPath = 256;
+        public float closureSnapThreshold = 2f;
         public float noiseScale = 1f;
         public int textureSmoothingRadius;
     }
@@ -46,6 +47,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public bool generateRoad = true;
         public float roadWidth = 2f;
         public float antiCurl = 0.5f;
+        public float antiCurlSteer = 1f;
+        public float antiCurlSteerRange = 0f;
         public CurveKeySpec[] roadFinalRemap;
         public int[] naturalWeights;
         public int[] roadWeights;
@@ -341,6 +344,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     startCoverStopSamples = cfg.startCoverStopSamples,
                     walkSeed = cfg.walkSeed,
                     maxStepsPerPath = cfg.maxStepsPerPath,
+                    closureSnapThreshold = cfg.closureSnapThreshold,
                     noiseScale = cfg.noiseScale,
                     textureSmoothingRadius = cfg.textureSmoothingRadius,
                 },
@@ -389,6 +393,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     generateRoad = layer != null && layer.generateRoad,
                     roadWidth = layer != null ? layer.roadWidth : 0f,
                     antiCurl = layer != null ? layer.antiCurl : 0.5f,
+                    antiCurlSteer = layer != null ? layer.antiCurlSteer : 1f,
+                    antiCurlSteerRange = layer != null ? layer.antiCurlSteerRange : 0f,
                     roadFinalRemap = ExportCurve(layer != null ? layer.roadFinalRemap : null),
                     naturalWeights = layer != null ? layer.naturalLayerWeights.ToArray() : Array.Empty<int>(),
                     roadWeights = layer != null ? layer.roadLayerWeights.ToArray() : Array.Empty<int>(),
@@ -490,6 +496,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
             target.roadStep = source.roadStep; target.walkStartTries = source.walkStartTries;
             target.walkCandidateCount = source.walkCandidateCount; target.startCoverStopSamples = source.startCoverStopSamples;
             target.walkSeed = source.walkSeed; target.maxStepsPerPath = source.maxStepsPerPath;
+            target.closureSnapThreshold = Mathf.Max(0f, source.closureSnapThreshold);
             target.noiseScale = source.noiseScale;
             target.textureSmoothingRadius = Mathf.Max(0, source.textureSmoothingRadius);
         }
@@ -505,6 +512,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 if (spec.index > 0 && spec.color?.Length >= 4) layer.color = new Color(spec.color[0], spec.color[1], spec.color[2], spec.color[3]);
                 if (spec.heightRange?.Length >= 2) layer.heightRange = new Vector2(spec.heightRange[0], spec.heightRange[1]);
                 layer.generateRoad = spec.generateRoad; layer.roadWidth = spec.roadWidth; layer.antiCurl = spec.antiCurl;
+                layer.antiCurlSteer = Mathf.Max(1f, spec.antiCurlSteer); layer.antiCurlSteerRange = Mathf.Max(0f, spec.antiCurlSteerRange);
                 layer.roadFinalRemap = ToCurve(spec.roadFinalRemap);
                 if (spec.naturalWeights != null) layer.naturalLayerWeights = new List<int>(spec.naturalWeights);
                 if (spec.roadWeights != null) layer.roadLayerWeights = new List<int>(spec.roadWeights);
@@ -525,7 +533,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 if (s.randomScale?.Length >= 2) group.randomScale = new Vector2(s.randomScale[0], s.randomScale[1]);
                 if (s.offRoadRange?.Length >= 2) group.offRoadDistanceRange = new Vector2(s.offRoadRange[0], s.offRoadRange[1]);
                 group.targetLayers = (TerrainWorkflowLayerMask)(ushort)s.layerMask;
-                if (s.prefabs != null) foreach (WeightedPrefabSpec p in s.prefabs) group.prefabs.Add(new ScatterPrefabEntry { prefab = LoadPrefab(p.path), weight = p.weight });
+                if (s.prefabs != null) foreach (WeightedPrefabSpec p in s.prefabs) group.prefabs.Add(new ScatterPrefabEntry { prefab = LoadGroupPrefab(p.path), weight = p.weight });
                 AssetDatabase.CreateAsset(group, folder + $"/Scatter_{i:00}.asset"); project.scatterGroups.Add(group);
             }
         }
@@ -546,7 +554,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 group.arrangementBasis = ParseEnum(s.basis, PropArrangementBasis.OffRoad);
                 if (s.range?.Length >= 2) group.arrangementRange = new Vector2(s.range[0], s.range[1]);
                 group.rotationMode = ParseEnum(s.rotation, PropRotationMode.Random); group.distributionMode = ParseEnum(s.distribution, PropDistributionMode.Scatter); group.distributionSpacing = s.spacing;
-                if (s.prefabs != null) foreach (WeightedPrefabSpec p in s.prefabs) group.prefabs.Add(new PropPrefabEntry { prefab = LoadPrefab(p.path), weight = p.weight, minimumCount = p.minimumCount });
+                if (s.prefabs != null) foreach (WeightedPrefabSpec p in s.prefabs) group.prefabs.Add(new PropPrefabEntry { prefab = LoadGroupPrefab(p.path), weight = p.weight, minimumCount = p.minimumCount });
                 AssetDatabase.CreateAsset(group, folder + $"/Prop_{i:00}.asset"); project.propGroups.Add(group);
             }
         }
@@ -578,7 +586,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
             for (int i = 0; i < specs.Length; i++)
             {
                 FixedGroupSpec s = specs[i]; if (s == null) continue;
-                var group = ScriptableObject.CreateInstance<FixedPointConfigSO>(); group.prefab = LoadPrefab(s.prefab); group.rotationDegrees = s.rotation; group.scale = s.scale;
+                var group = ScriptableObject.CreateInstance<FixedPointConfigSO>(); group.prefab = LoadGroupPrefab(s.prefab); group.rotationDegrees = s.rotation; group.scale = s.scale;
                 if (s.chunkSize?.Length >= 2) group.chunkSize = new Vector2(s.chunkSize[0], s.chunkSize[1]);
                 group.visibleDistance = s.visibleDistance;
                 if (s.markerColor?.Length >= 4) group.markerColor = new Color(s.markerColor[0], s.markerColor[1], s.markerColor[2], s.markerColor[3]);
@@ -720,6 +728,19 @@ namespace AiTerrainWorkflow.Editor.Bridge
         private static T ParseEnum<T>(string value, T fallback) where T : struct { return !string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, true, out T parsed) ? parsed : fallback; }
         private static Vector2Int Point(int[] value) { return value != null && value.Length >= 2 ? new Vector2Int(value[0], value[1]) : Vector2Int.zero; }
         private static GameObject LoadPrefab(string path) { return string.IsNullOrWhiteSpace(path) ? null : AssetDatabase.LoadAssetAtPath<GameObject>(NormalizeAssetPath(path)); }
+        /// <summary>生成组引用加载：支持裸文件名（自动补全到备用 Prefab 目录）或完整 Assets 路径；顶层源 prefabs[] 仍走 LoadPrefab。</summary>
+        private static GameObject LoadGroupPrefab(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            string p = NormalizeAssetPath(path);
+            if (!p.Contains('/'))
+            {
+                string name = p.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)
+                    ? p.Substring(0, p.Length - ".prefab".Length) : p;
+                p = PrefabProcessingUtility.CandidatePrefabDirectory + "/" + name + ".prefab";
+            }
+            return AssetDatabase.LoadAssetAtPath<GameObject>(p);
+        }
         private static void ReplaceAssets(List<TerrainLayer> target, string[] paths) { if (paths == null) return; target.Clear(); foreach (string path in paths) target.Add(AssetDatabase.LoadAssetAtPath<TerrainLayer>(NormalizeAssetPath(path))); }
         private static string NormalizeAssetPath(string path) { return (path ?? "").Replace('\\', '/'); }
         private static string ProjectDirectory(TerrainPaintProjectSO project) { return Path.GetDirectoryName(AssetDatabase.GetAssetPath(project)).Replace('\\', '/'); }

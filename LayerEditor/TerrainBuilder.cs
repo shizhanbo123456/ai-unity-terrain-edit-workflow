@@ -574,7 +574,9 @@ namespace AiTerrainWorkflow.LayerEditor
                 sb.Append("l").Append(i).Append(':')
                   .Append(layer.generateRoad ? 1 : 0).Append(',')
                   .Append(layer.roadWidth.ToString("R", CultureInfo.InvariantCulture)).Append(',')
-                  .Append(layer.antiCurl.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+                  .Append(layer.antiCurl.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(layer.antiCurlSteer.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(layer.antiCurlSteerRange.ToString("R", CultureInfo.InvariantCulture)).Append(';');
             }
             for (int g = 0; g < _config.adjacencyGroups.Count; g++)
             {

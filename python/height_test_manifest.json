@@ -6,7 +6,7 @@
   "heightScale": 0.02,
   "smoothStep": 1,
   "smoothIterations": 8,
-  "paintConfig": {"roadStep":2.0,"walkStartTries":10,"walkCandidateCount":8,"startCoverStopSamples":8,"walkSeed":7001,"maxStepsPerPath":256,"noiseScale":1.0,"textureSmoothingRadius":1},
+  "paintConfig": {"roadStep":2.0,"walkStartTries":10,"walkCandidateCount":8,"startCoverStopSamples":8,"walkSeed":7001,"maxStepsPerPath":256,"closureSnapThreshold":2,"noiseScale":1.0,"textureSmoothingRadius":1},
   "naturalSeed": 101,
   "roadSeed": 202,
   "scatterSeed": 303,

@@ -260,11 +260,11 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (path.Count > 0)
                 {
                     var last = path[path.Count - 1];
-                    // 闭环合并：末点附近的历史点 → 接入网络
+                    // 闭环合并：末点附近（< 阈值 × stepWorld）的历史点 → 接入网络
                     Vector2Int? join = null;
                     foreach (var p in allPoints)
                     {
-                        if (DistWorld(p, last, pixelWorldSize) < stepWorld * 2f)
+                        if (DistWorld(p, last, pixelWorldSize) < stepWorld * cfg.closureSnapThreshold)
                         {
                             join = p;
                             break;

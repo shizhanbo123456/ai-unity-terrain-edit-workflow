@@ -25,6 +25,9 @@ namespace AiTerrainWorkflow.LayerEditor
         public int walkSeed = 0;
         [Tooltip("单条路径步数硬上限（安全护栏）")]
         public int maxStepsPerPath = 256;
+        [Min(0f)]
+        [Tooltip("闭环合并吸附阈值：路径末点与任意历史点距离 < 阈值 × stepWorld 时接入网络（默认 2 = 2 倍步距；0 = 关闭闭环合并）")]
+        public float closureSnapThreshold = 2f;
 
         [Header("贴图混合")]
         [Tooltip("value-noise 加权混合的空间频率（世界距离）")]
