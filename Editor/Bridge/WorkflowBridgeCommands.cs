@@ -27,6 +27,11 @@ namespace AiTerrainWorkflow.Editor.Bridge
     [Serializable]
     public sealed class PaintConfigSpec
     {
+        public float minimumRoadRegionArea = 25f;
+        public float minimumCorridorAspect = 1.15f;
+        public float minimumSkeletonBranchLength = 12f;
+        public float spurLengthToWidthRatio = 1.25f;
+        public float roadBoundaryMargin = 0.25f;
         public float roadStep = 2f;
         public int walkStartTries = 10;
         public int walkCandidateCount = 8;
@@ -338,6 +343,11 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 smoothIterations = project.smoothIterations,
                 paintConfig = new PaintConfigSpec
                 {
+                    minimumRoadRegionArea = cfg.minimumRoadRegionArea,
+                    minimumCorridorAspect = cfg.minimumCorridorAspect,
+                    minimumSkeletonBranchLength = cfg.minimumSkeletonBranchLength,
+                    spurLengthToWidthRatio = cfg.spurLengthToWidthRatio,
+                    roadBoundaryMargin = cfg.roadBoundaryMargin,
                     roadStep = cfg.roadStep,
                     walkStartTries = cfg.walkStartTries,
                     walkCandidateCount = cfg.walkCandidateCount,
@@ -493,6 +503,11 @@ namespace AiTerrainWorkflow.Editor.Bridge
 
         private static void ApplyPaintConfig(TerrainPaintConfig target, PaintConfigSpec source)
         {
+            target.minimumRoadRegionArea = Mathf.Max(0f, source.minimumRoadRegionArea);
+            target.minimumCorridorAspect = Mathf.Max(0f, source.minimumCorridorAspect);
+            target.minimumSkeletonBranchLength = Mathf.Max(0f, source.minimumSkeletonBranchLength);
+            target.spurLengthToWidthRatio = Mathf.Max(0f, source.spurLengthToWidthRatio);
+            target.roadBoundaryMargin = Mathf.Max(0f, source.roadBoundaryMargin);
             target.roadStep = source.roadStep; target.walkStartTries = source.walkStartTries;
             target.walkCandidateCount = source.walkCandidateCount; target.startCoverStopSamples = source.startCoverStopSamples;
             target.walkSeed = source.walkSeed; target.maxStepsPerPath = source.maxStepsPerPath;

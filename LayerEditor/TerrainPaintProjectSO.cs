@@ -12,7 +12,19 @@ namespace AiTerrainWorkflow.LayerEditor
     [Serializable]
     public class TerrainPaintConfig
     {
-        [Header("随机游走")]
+        [Header("道路骨架（旧随机游走字段仅为资产兼容保留）")]
+        [Tooltip("道路候选连通区域的最小世界面积；更小的孤岛不生成道路")]
+        [Min(0f)] public float minimumRoadRegionArea = 25f;
+        [Tooltip("区域面积 / 最大内切直径平方的最小值；越大越偏向狭长区域，1 左右会接受近方形区域")]
+        [Min(0f)] public float minimumCorridorAspect = 1.15f;
+        [Tooltip("骨架端点支路的最小世界长度")]
+        [Min(0f)] public float minimumSkeletonBranchLength = 12f;
+        [Tooltip("端点支路长度至少为局部走廊宽度的多少倍，否则视为边界噪声剪除")]
+        [Min(0f)] public float spurLengthToWidthRatio = 1.25f;
+        [Tooltip("道路半径与 Layer 边界之间保留的世界距离，防止路面盖章越界")]
+        [Min(0f)] public float roadBoundaryMargin = 0.25f;
+
+        [Header("旧随机游走参数（已弃用）")]
         [Tooltip("相邻游走点的最小距离（世界距离）；也是候选采样邻域半径")]
         public float roadStep = 2f;
         [Tooltip("完全随机找起点的尝试次数上限")]

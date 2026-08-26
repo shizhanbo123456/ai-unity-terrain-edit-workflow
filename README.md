@@ -165,7 +165,11 @@ function ApplyHeight(session):
     terrain.terrainData.SetHeights(normalized)
 ```
 
-### 4. 距离场、路网与地形贴图（`ApplyTexture`，已实现）
+### 4. 距离场、形状骨架路网与地形贴图（`ApplyTexture`，已实现）
+
+道路生成以 Layer 形状为主要输入，不要求人工锚点：先按邻接组拼合可生成道路的 Layer，分离连通区域，使用世界单位距离场判断区域是否具有走廊特征，再以拓扑保持细化提取中轴骨架。骨架端点的短支刺按世界长度与局部走廊宽度剪除；路面半径取 Layer `roadWidth` 与中轴到边界安全净空的较小值，并严格裁剪在所属邻接组内。`occupancy` MapData 兼容保留，当前语义改为剪枝后的单像素道路中心骨架；`road` 仍为硬路面遮罩。
+
+全局骨架参数位于 `TerrainPaintConfig`：`minimumRoadRegionArea`、`minimumCorridorAspect`、`minimumSkeletonBranchLength`、`spurLengthToWidthRatio`、`roadBoundaryMargin`。旧随机游走参数继续序列化以兼容历史资产，但当前道路生成入口不再使用。
 
 ```text
 function CalculateRoadMapData(project, layerMap, terrain):

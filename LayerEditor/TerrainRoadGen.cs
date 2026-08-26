@@ -7,8 +7,9 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图核心算法（不依赖 UnityEditor，供编辑器窗口与后续复用）。
     ///
-    /// 链路：层次图 → 层ID数组 → 组合层级分组 → 欧氏距离场 R（maxD 自动归一化）
-    ///      → 随机游走路网（G 占用/间隔缓冲 + B 路面硬掩码）→ RGB 合成图。
+    /// 链路：层次图 → 层ID数组 → 组合层级分组 → 世界欧氏距离场 R
+    ///      → 连通区域形状筛选 → 中轴细化与支刺剪枝 → 安全宽度路面 B。
+    /// G 为剪枝后的骨架调试图，保留原 RGB/MapData 通道以兼容现有资产。
     ///
     /// 参数语义见设计文档《混合距离场与路面生成工具_设计文档(2).md》最终版。
     /// </summary>
@@ -226,13 +227,223 @@ namespace AiTerrainWorkflow.LayerEditor
             return d;
         }
 
-        // ---------- 随机游走（G 占用/间隔 + B 路面掩码） ----------
+        // ---------- Layer 形状感知道路（连通域 → 中轴骨架 → 剪枝 → 路面） ----------
+
+        /// <summary>
+        /// 从组合 Layer 的形状自动提取道路。G 是剪枝后的单像素骨架调试图，
+        /// B 是按各 Layer roadWidth 栅格化且严格裁剪在组合区域内的路面硬掩码。
+        /// </summary>
+        public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
+            TerrainPaintConfig cfg, List<LayerConfigSO> layers, Vector2 pixelWorldSize,
+            out float[] g, out float[] b)
+        {
+            g = new float[w * h];
+            b = new float[w * h];
+            pixelWorldSize.x = Mathf.Max(0.0001f, pixelWorldSize.x);
+            pixelWorldSize.y = Mathf.Max(0.0001f, pixelWorldSize.y);
+            var groupMask = new bool[w * h];
+            for (int i = 0; i < groupMask.Length; i++)
+                groupMask[i] = InGroup(layerIds[i], group);
+
+            foreach (var component in FindComponents(groupMask, w, h))
+            {
+                if (!IsRoadLikeComponent(component, r, cfg, pixelWorldSize)) continue;
+                var componentMask = new bool[w * h];
+                for (int i = 0; i < component.Count; i++) componentMask[component[i]] = true;
+                bool[] skeleton = ThinZhangSuen(componentMask, w, h);
+                PruneSkeletonSpurs(skeleton, r, w, h, cfg, pixelWorldSize);
+
+                for (int idx = 0; idx < skeleton.Length; idx++)
+                {
+                    if (!skeleton[idx]) continue;
+                    g[idx] = 1f;
+                    int layerId = layerIds[idx];
+                    float preferredRadius = layerId >= 0 && layerId < layers.Count && layers[layerId] != null
+                        ? Mathf.Max(0f, layers[layerId].roadWidth) : 0f;
+                    float safeRadius = Mathf.Max(0f, r[idx] - cfg.roadBoundaryMargin);
+                    StampRoadEllipse(b, groupMask, w, h, idx % w, idx / w,
+                        Mathf.Min(preferredRadius, safeRadius), pixelWorldSize);
+                }
+            }
+        }
+
+        private static List<List<int>> FindComponents(bool[] mask, int w, int h)
+        {
+            var result = new List<List<int>>();
+            var visited = new bool[mask.Length];
+            var queue = new Queue<int>();
+            for (int start = 0; start < mask.Length; start++)
+            {
+                if (!mask[start] || visited[start]) continue;
+                var component = new List<int>();
+                visited[start] = true;
+                queue.Enqueue(start);
+                while (queue.Count > 0)
+                {
+                    int idx = queue.Dequeue();
+                    component.Add(idx);
+                    int x = idx % w, y = idx / w;
+                    for (int oy = -1; oy <= 1; oy++)
+                    for (int ox = -1; ox <= 1; ox++)
+                    {
+                        if (ox == 0 && oy == 0) continue;
+                        int nx = x + ox, ny = y + oy;
+                        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                        int ni = ny * w + nx;
+                        if (!mask[ni] || visited[ni]) continue;
+                        visited[ni] = true;
+                        queue.Enqueue(ni);
+                    }
+                }
+                result.Add(component);
+            }
+            return result;
+        }
+
+        private static bool IsRoadLikeComponent(List<int> component, float[] distance,
+            TerrainPaintConfig cfg, Vector2 pixelWorldSize)
+        {
+            float area = component.Count * pixelWorldSize.x * pixelWorldSize.y;
+            if (area < cfg.minimumRoadRegionArea) return false;
+            float maxClearance = 0f;
+            for (int i = 0; i < component.Count; i++)
+                maxClearance = Mathf.Max(maxClearance, distance[component[i]]);
+            if (maxClearance <= 0.0001f) return false;
+            float corridorAspect = area / (4f * maxClearance * maxClearance);
+            return corridorAspect >= cfg.minimumCorridorAspect;
+        }
+
+        private static bool[] ThinZhangSuen(bool[] source, int w, int h)
+        {
+            var image = (bool[])source.Clone();
+            var remove = new List<int>();
+            bool changed;
+            do
+            {
+                changed = false;
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    remove.Clear();
+                    for (int y = 1; y < h - 1; y++)
+                    for (int x = 1; x < w - 1; x++)
+                    {
+                        int i = y * w + x;
+                        if (!image[i]) continue;
+                        bool p2=image[(y-1)*w+x], p3=image[(y-1)*w+x+1];
+                        bool p4=image[y*w+x+1], p5=image[(y+1)*w+x+1];
+                        bool p6=image[(y+1)*w+x], p7=image[(y+1)*w+x-1];
+                        bool p8=image[y*w+x-1], p9=image[(y-1)*w+x-1];
+                        int neighbours = BoolInt(p2)+BoolInt(p3)+BoolInt(p4)+BoolInt(p5)+
+                            BoolInt(p6)+BoolInt(p7)+BoolInt(p8)+BoolInt(p9);
+                        if (neighbours < 2 || neighbours > 6) continue;
+                        bool[] ring = {p2,p3,p4,p5,p6,p7,p8,p9,p2};
+                        int transitions = 0;
+                        for (int k = 0; k < 8; k++) if (!ring[k] && ring[k+1]) transitions++;
+                        if (transitions != 1) continue;
+                        bool removable = pass == 0
+                            ? !(p2 && p4 && p6) && !(p4 && p6 && p8)
+                            : !(p2 && p4 && p8) && !(p2 && p6 && p8);
+                        if (removable) remove.Add(i);
+                    }
+                    if (remove.Count == 0) continue;
+                    changed = true;
+                    for (int i = 0; i < remove.Count; i++) image[remove[i]] = false;
+                }
+            } while (changed);
+            return image;
+        }
+
+        private static int BoolInt(bool value) { return value ? 1 : 0; }
+
+        private static void PruneSkeletonSpurs(bool[] skeleton, float[] distance, int w, int h,
+            TerrainPaintConfig cfg, Vector2 pixelWorldSize)
+        {
+            for (int iteration = 0; iteration < 64; iteration++)
+            {
+                var endpoints = new List<int>();
+                for (int i = 0; i < skeleton.Length; i++)
+                    if (skeleton[i] && SkeletonDegree(skeleton, i, w, h) == 1) endpoints.Add(i);
+                var remove = new HashSet<int>();
+                for (int e = 0; e < endpoints.Count; e++)
+                {
+                    int start=endpoints[e], previous=-1, current=start;
+                    var chain = new List<int> {start};
+                    float length=0f, widthSum=2f*distance[start];
+                    int terminalDegree=1;
+                    while (true)
+                    {
+                        int next=-1, choices=0, cx=current%w, cy=current/w;
+                        for (int oy=-1; oy<=1; oy++)
+                        for (int ox=-1; ox<=1; ox++)
+                        {
+                            if (ox==0 && oy==0) continue;
+                            int nx=cx+ox, ny=cy+oy;
+                            if (nx<0 || nx>=w || ny<0 || ny>=h) continue;
+                            int ni=ny*w+nx;
+                            if (ni==previous || !skeleton[ni]) continue;
+                            next=ni; choices++;
+                        }
+                        terminalDegree=SkeletonDegree(skeleton,current,w,h);
+                        if (current!=start && terminalDegree!=2) break;
+                        if (choices!=1 || next<0) break;
+                        int nxp=next%w, nyp=next/w;
+                        float dx=(nxp-cx)*pixelWorldSize.x, dz=(nyp-cy)*pixelWorldSize.y;
+                        length+=Mathf.Sqrt(dx*dx+dz*dz);
+                        previous=current; current=next;
+                        chain.Add(current); widthSum+=2f*distance[current];
+                    }
+                    if (terminalDegree<3) continue;
+                    float meanWidth=widthSum/Mathf.Max(1,chain.Count);
+                    float required=Mathf.Max(cfg.minimumSkeletonBranchLength,
+                        meanWidth*cfg.spurLengthToWidthRatio);
+                    if (length>=required) continue;
+                    for (int i=0; i<chain.Count-1; i++) remove.Add(chain[i]);
+                }
+                if (remove.Count==0) break;
+                foreach (int idx in remove) skeleton[idx]=false;
+            }
+        }
+
+        private static int SkeletonDegree(bool[] skeleton, int idx, int w, int h)
+        {
+            int x=idx%w, y=idx/w, degree=0;
+            for (int oy=-1; oy<=1; oy++)
+            for (int ox=-1; ox<=1; ox++)
+            {
+                if (ox==0 && oy==0) continue;
+                int nx=x+ox, ny=y+oy;
+                if (nx>=0 && nx<w && ny>=0 && ny<h && skeleton[ny*w+nx]) degree++;
+            }
+            return degree;
+        }
+
+        private static void StampRoadEllipse(float[] road, bool[] allowed, int w, int h,
+            int cx, int cy, float radiusWorld, Vector2 pixelWorldSize)
+        {
+            int radiusX=Mathf.CeilToInt(radiusWorld/pixelWorldSize.x);
+            int radiusY=Mathf.CeilToInt(radiusWorld/pixelWorldSize.y);
+            float radiusSquared=radiusWorld*radiusWorld;
+            for (int y=cy-radiusY; y<=cy+radiusY; y++)
+            {
+                if (y<0 || y>=h) continue;
+                for (int x=cx-radiusX; x<=cx+radiusX; x++)
+                {
+                    if (x<0 || x>=w) continue;
+                    int idx=y*w+x;
+                    if (!allowed[idx]) continue;
+                    float dx=(x-cx)*pixelWorldSize.x, dz=(y-cy)*pixelWorldSize.y;
+                    if (dx*dx+dz*dz<=radiusSquared) road[idx]=1f;
+                }
+            }
+        }
+
+        // ---------- 旧随机游走（资产兼容参考；当前生成入口不再调用） ----------
 
         /// <summary>
         /// 在单个组合层级内生成路网：写 G（防卷曲占用缓冲）与 B（路面硬掩码）。
         /// 所有游走点必须与起点同组合层；候选点跨组直接跳过。
         /// </summary>
-        public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
+        private static void GenerateRoadsLegacy(int[] layerIds, float[] r, int w, int h, List<int> group,
             TerrainPaintConfig cfg, List<LayerConfigSO> layers, Vector2 pixelWorldSize,
             out float[] g, out float[] b)
         {
@@ -479,7 +690,7 @@ namespace AiTerrainWorkflow.LayerEditor
             return ComposeRgb(rDisplay, g, b, w, h);
         }
 
-        /// <summary>合成 RGB 图：R=距离场，G=占用/间隔，B=路面掩码。R 由调用方保证已归一化（显示语义）。</summary>
+        /// <summary>合成 RGB 图：R=距离场，G=道路中心骨架，B=路面掩码。R 由调用方保证已归一化。</summary>
         public static Texture2D ComposeRgb(float[] r, float[] g, float[] b, int w, int h)
         {
             var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);

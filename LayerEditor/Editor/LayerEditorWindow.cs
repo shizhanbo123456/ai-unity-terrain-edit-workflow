@@ -1056,6 +1056,14 @@ namespace AiTerrainWorkflow.LayerEditor
         private void DrawGlobalConfig()
         {
             var cfg = _project.config;
+            EditorGUILayout.LabelField("Layer 形状道路骨架", EditorStyles.boldLabel);
+            cfg.minimumRoadRegionArea = Mathf.Max(0f, EditorGUILayout.FloatField("最小道路区域面积 (m²)", cfg.minimumRoadRegionArea));
+            cfg.minimumCorridorAspect = Mathf.Max(0f, EditorGUILayout.FloatField("最小走廊形状比", cfg.minimumCorridorAspect));
+            cfg.minimumSkeletonBranchLength = Mathf.Max(0f, EditorGUILayout.FloatField("最小骨架支路长度 (m)", cfg.minimumSkeletonBranchLength));
+            cfg.spurLengthToWidthRatio = Mathf.Max(0f, EditorGUILayout.FloatField("支刺长度/宽度比", cfg.spurLengthToWidthRatio));
+            cfg.roadBoundaryMargin = Mathf.Max(0f, EditorGUILayout.FloatField("道路边界留白 (m)", cfg.roadBoundaryMargin));
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("旧随机游走参数（兼容保留，当前算法不使用）", EditorStyles.miniBoldLabel);
             cfg.roadStep = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Step (m)", cfg.roadStep));
             cfg.walkStartTries = Mathf.Max(1, EditorGUILayout.IntField("Walk Start Tries", cfg.walkStartTries));
             cfg.walkCandidateCount = Mathf.Max(1, EditorGUILayout.IntField("Walk Candidate Count", cfg.walkCandidateCount));
