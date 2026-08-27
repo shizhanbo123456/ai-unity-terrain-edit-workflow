@@ -169,7 +169,7 @@ function ApplyHeight(session):
 
 道路生成以 Layer 形状为主要输入，不要求人工锚点：先按邻接组拼合可生成道路的 Layer，分离连通区域，使用世界单位距离场判断区域是否具有走廊特征，再以拓扑保持细化提取中轴骨架。骨架端点的短支刺按世界长度与局部走廊宽度剪除；路面半径取 Layer `roadWidth` 与中轴到边界安全净空的较小值，并严格裁剪在所属邻接组内。`occupancy` MapData 兼容保留，当前语义改为剪枝后的单像素道路中心骨架；`road` 仍为硬路面遮罩。
 
-全局骨架参数位于 `TerrainPaintConfig`：`minimumRoadRegionArea`、`minimumCorridorAspect`、`minimumSkeletonBranchLength`、`spurLengthToWidthRatio`、`roadBoundaryMargin`。旧随机游走参数继续序列化以兼容历史资产，但当前道路生成入口不再使用。
+全局骨架参数位于 `TerrainPaintConfig`：`minimumRoadRegionArea`、`minimumCorridorAspect`、`minimumSkeletonBranchLength`、`spurLengthToWidthRatio`、`roadBoundaryMargin`。
 
 ```text
 function CalculateRoadMapData(project, layerMap, terrain):
@@ -381,7 +381,7 @@ function WorkflowConfig.DrawMapDataPreview():
 | 0 素材准备 | 美术资产（prefab/贴图/TerrainLayer/模型） | 将源 Prefab 生成为工具内部备用 Prefab（**创建时自动标准化：模型合并 Bounds 的「中心正下方」对齐根节点原点**），再按需调整子物体、方向与组合，并更新 Bounds/Billboard | TerrainLayer 素材池 + `Generated/Prefabs` 备用库 | **[已完成]** |
 | 1 区域编辑 | 手绘语义层 | LayerMap 画布绘制，**每笔完写** | `layerMap`（MapData） | **[已完成]** |
 | 2 高度编辑 | layerMap + 每层 heightRange | Perlin 插值 → 真实高度 | `height`（MapData） | **[已完成]** |
-| 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 随机游走路网 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
+| 3 贴图编辑 | layerMap + 邻接组 + 权重规则 | 距离场 EDT + 形状感知道路提取 + 离路距离场 | `distance/occupancy/road/offRoad`（MapData） | **[已完成]** |
 | 4 散布编辑 | layerMap + 多个散布生成组 | 按组配置目标层级、离路范围、密度、缩放、Prefab 池与流式区块参数 | `ScatterConfig/*.asset`；位置入 `PlacementCache/Scatter_xx.txt` | **[已完成]**（配置编辑 + 分组流式生成） |
 | 5 摆件编辑 | 物体库 prefab + `PropConfigSO` | 多候选择优、值域/层级过滤、Bounds 足迹、分布与世界间距约束 | `PropConfig/*.asset`；位置入 `PlacementCache/Prop_xx.txt` | **[已完成]** |
 | 6 定点编辑 | layerMap + 定点生成组 | 在只读 layer 图上预览归一化固定位置；每组使用单个 Prefab | `FixedPointConfig/*.asset`；位置入 `PlacementCache/Fixed_xx.txt` | **[已完成]**（配置、位置预览与实际应用） |

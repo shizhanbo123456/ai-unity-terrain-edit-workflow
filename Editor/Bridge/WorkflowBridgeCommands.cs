@@ -23,7 +23,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
 
     [Serializable] public sealed class IntGroupSpec { public int[] values; }
     [Serializable] public sealed class WeightedPrefabSpec { public string path; public int weight = 1; public int minimumCount; }
-    [Serializable] public sealed class CurveKeySpec { public float time; public float value; public float inTangent; public float outTangent; public float inWeight; public float outWeight; public int weightedMode; }
     [Serializable]
     public sealed class PaintConfigSpec
     {
@@ -32,13 +31,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public float minimumSkeletonBranchLength = 12f;
         public float spurLengthToWidthRatio = 1.25f;
         public float roadBoundaryMargin = 0.25f;
-        public float roadStep = 2f;
-        public int walkStartTries = 10;
-        public int walkCandidateCount = 8;
-        public int startCoverStopSamples = 8;
-        public int walkSeed;
-        public int maxStepsPerPath = 256;
-        public float closureSnapThreshold = 2f;
         public float noiseScale = 1f;
         public int textureSmoothingRadius;
     }
@@ -51,10 +43,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public float[] heightRange;
         public bool generateRoad = true;
         public float roadWidth = 2f;
-        public float antiCurl = 0.5f;
-        public float antiCurlSteer = 1f;
-        public float antiCurlSteerRange = 0f;
-        public CurveKeySpec[] roadFinalRemap;
         public int[] naturalWeights;
         public int[] roadWeights;
     }
@@ -348,13 +336,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     minimumSkeletonBranchLength = cfg.minimumSkeletonBranchLength,
                     spurLengthToWidthRatio = cfg.spurLengthToWidthRatio,
                     roadBoundaryMargin = cfg.roadBoundaryMargin,
-                    roadStep = cfg.roadStep,
-                    walkStartTries = cfg.walkStartTries,
-                    walkCandidateCount = cfg.walkCandidateCount,
-                    startCoverStopSamples = cfg.startCoverStopSamples,
-                    walkSeed = cfg.walkSeed,
-                    maxStepsPerPath = cfg.maxStepsPerPath,
-                    closureSnapThreshold = cfg.closureSnapThreshold,
                     noiseScale = cfg.noiseScale,
                     textureSmoothingRadius = cfg.textureSmoothingRadius,
                 },
@@ -402,10 +383,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     heightRange = layer != null ? new[] { layer.heightRange.x, layer.heightRange.y } : new[] { 0f, 1f },
                     generateRoad = layer != null && layer.generateRoad,
                     roadWidth = layer != null ? layer.roadWidth : 0f,
-                    antiCurl = layer != null ? layer.antiCurl : 0.5f,
-                    antiCurlSteer = layer != null ? layer.antiCurlSteer : 1f,
-                    antiCurlSteerRange = layer != null ? layer.antiCurlSteerRange : 0f,
-                    roadFinalRemap = ExportCurve(layer != null ? layer.roadFinalRemap : null),
                     naturalWeights = layer != null ? layer.naturalLayerWeights.ToArray() : Array.Empty<int>(),
                     roadWeights = layer != null ? layer.roadLayerWeights.ToArray() : Array.Empty<int>(),
                 };
@@ -413,14 +390,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
             return result;
         }
 
-        private static CurveKeySpec[] ExportCurve(AnimationCurve curve)
-        {
-            Keyframe[] keys = curve != null ? curve.keys : AnimationCurve.Linear(0f, 0f, 1f, 1f).keys;
-            var result = new CurveKeySpec[keys.Length];
-            for (int i = 0; i < keys.Length; i++)
-                result[i] = new CurveKeySpec { time = keys[i].time, value = keys[i].value, inTangent = keys[i].inTangent, outTangent = keys[i].outTangent, inWeight = keys[i].inWeight, outWeight = keys[i].outWeight, weightedMode = (int)keys[i].weightedMode };
-            return result;
-        }
 
         private static IntGroupSpec[] ExportAdjacencyGroups(List<List<int>> groups)
         {
@@ -508,10 +477,6 @@ namespace AiTerrainWorkflow.Editor.Bridge
             target.minimumSkeletonBranchLength = Mathf.Max(0f, source.minimumSkeletonBranchLength);
             target.spurLengthToWidthRatio = Mathf.Max(0f, source.spurLengthToWidthRatio);
             target.roadBoundaryMargin = Mathf.Max(0f, source.roadBoundaryMargin);
-            target.roadStep = source.roadStep; target.walkStartTries = source.walkStartTries;
-            target.walkCandidateCount = source.walkCandidateCount; target.startCoverStopSamples = source.startCoverStopSamples;
-            target.walkSeed = source.walkSeed; target.maxStepsPerPath = source.maxStepsPerPath;
-            target.closureSnapThreshold = Mathf.Max(0f, source.closureSnapThreshold);
             target.noiseScale = source.noiseScale;
             target.textureSmoothingRadius = Mathf.Max(0, source.textureSmoothingRadius);
         }
@@ -526,9 +491,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 if (!string.IsNullOrWhiteSpace(spec.name)) layer.layerName = spec.name;
                 if (spec.index > 0 && spec.color?.Length >= 4) layer.color = new Color(spec.color[0], spec.color[1], spec.color[2], spec.color[3]);
                 if (spec.heightRange?.Length >= 2) layer.heightRange = new Vector2(spec.heightRange[0], spec.heightRange[1]);
-                layer.generateRoad = spec.generateRoad; layer.roadWidth = spec.roadWidth; layer.antiCurl = spec.antiCurl;
-                layer.antiCurlSteer = Mathf.Max(1f, spec.antiCurlSteer); layer.antiCurlSteerRange = Mathf.Max(0f, spec.antiCurlSteerRange);
-                layer.roadFinalRemap = ToCurve(spec.roadFinalRemap);
+                layer.generateRoad = spec.generateRoad; layer.roadWidth = spec.roadWidth; 
                 if (spec.naturalWeights != null) layer.naturalLayerWeights = new List<int>(spec.naturalWeights);
                 if (spec.roadWeights != null) layer.roadLayerWeights = new List<int>(spec.roadWeights);
                 EditorUtility.SetDirty(layer);
@@ -721,24 +684,12 @@ namespace AiTerrainWorkflow.Editor.Bridge
                     seen[layer.index] = true;
                     if (layer.color == null || layer.color.Length < 4) missing.Add($"layers[{layer.index}].color");
                     if (layer.heightRange == null || layer.heightRange.Length < 2) missing.Add($"layers[{layer.index}].heightRange");
-                    if (layer.roadFinalRemap == null || layer.roadFinalRemap.Length == 0) missing.Add($"layers[{layer.index}].roadFinalRemap");
                     if (layer.naturalWeights == null || manifest.naturalTerrainLayers == null || layer.naturalWeights.Length != manifest.naturalTerrainLayers.Length) missing.Add($"layers[{layer.index}].naturalWeights 长度");
                     if (layer.roadWeights == null || manifest.roadTerrainLayers == null || layer.roadWeights.Length != manifest.roadTerrainLayers.Length) missing.Add($"layers[{layer.index}].roadWeights 长度");
                 }
                 for (int i = 0; i < seen.Length; i++) if (!seen[i]) missing.Add("缺少 layer index: " + i);
             }
             if (missing.Count > 0) throw new ArgumentException("manifest 必须是完整配置，缺少或无效: " + string.Join(", ", missing));
-        }
-        private static AnimationCurve ToCurve(CurveKeySpec[] specs)
-        {
-            if (specs == null || specs.Length == 0) return AnimationCurve.Linear(0f, 0f, 1f, 1f);
-            var keys = new Keyframe[specs.Length];
-            for (int i = 0; i < specs.Length; i++)
-            {
-                CurveKeySpec s = specs[i];
-                keys[i] = new Keyframe(s.time, s.value, s.inTangent, s.outTangent, s.inWeight, s.outWeight) { weightedMode = (WeightedMode)s.weightedMode };
-            }
-            return new AnimationCurve(keys);
         }
         private static T ParseEnum<T>(string value, T fallback) where T : struct { return !string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, true, out T parsed) ? parsed : fallback; }
         private static Vector2Int Point(int[] value) { return value != null && value.Length >= 2 ? new Vector2Int(value[0], value[1]) : Vector2Int.zero; }

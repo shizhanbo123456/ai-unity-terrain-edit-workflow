@@ -58,8 +58,8 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 `python/manifest.example.json` 是完整模板，不是只展示常用字段的片段。C# 会拒绝缺少必需顶层集合或不是完整层数的 manifest，防止遗漏字段时把默认值误当成用户配置。模板覆盖：
 
 - `projectName`、`resolution`、`projectPath`：项目创建或定位。新建配置默认创建 3 层（Layer0 透明 + 2 个语义层），层数在 2~16 之间可增删。
-- 高度噪声、平滑参数，以及 `paintConfig` 中的道路随机游走、混合噪声、`textureSmoothingRadius`（最终 alphamap 五点平滑半径，单位为 alphamap 像素）和世界/像素预览比例。
-- `naturalTerrainLayers`、`roadTerrainLayers`、完整 `layers`（含道路重映射曲线）、`adjacencyGroups`。
+- 高度噪声、平滑参数，以及 `paintConfig` 中的混合噪声、`textureSmoothingRadius`（最终 alphamap 五点平滑半径，单位为 alphamap 像素）和世界/像素预览比例。
+- `naturalTerrainLayers`、`roadTerrainLayers`、完整 `layers`、`adjacencyGroups`。
 - `scatterGroups`、`propGroups`、`fixedGroups`：三个摆放模块的全部当前字段，每个生成组含 `chunkSize`（米）与 `visibleDistance`（米，负数=无限模式全量显示）。**`fixedGroups` 的 `positions` 不写入 JSON**：导出时只输出摘要 `positionCount`（定点条数）、`nonZeroCount`（非 0 值数量）与 `positionsPath`（定点位置所在的资产路径）；导入时 `positions` 为空且 `positionsPath` 指向现存资产时，从该资产复制位置。
 - `prefabs`：需要先处理的源 Prefab 及 Billboard/两点适高选项，可选 `lodTransition`（0~1，LOD0→LOD1 的屏幕相对高度切换阈值，默认 0.1；仅作为处理参数，不写入任何工作流配置）。
 - `areaOperations`：`Line`（两点+半径）、`Rectangle`（两点）、`Triangle`（三点）的有序操作列表；坐标为 LayerMap 像素。

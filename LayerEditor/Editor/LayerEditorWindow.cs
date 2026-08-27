@@ -1063,14 +1063,6 @@ namespace AiTerrainWorkflow.LayerEditor
             cfg.spurLengthToWidthRatio = Mathf.Max(0f, EditorGUILayout.FloatField("支刺长度/宽度比", cfg.spurLengthToWidthRatio));
             cfg.roadBoundaryMargin = Mathf.Max(0f, EditorGUILayout.FloatField("道路边界留白 (m)", cfg.roadBoundaryMargin));
             EditorGUILayout.Space(4f);
-            EditorGUILayout.LabelField("旧随机游走参数（兼容保留，当前算法不使用）", EditorStyles.miniBoldLabel);
-            cfg.roadStep = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Step (m)", cfg.roadStep));
-            cfg.walkStartTries = Mathf.Max(1, EditorGUILayout.IntField("Walk Start Tries", cfg.walkStartTries));
-            cfg.walkCandidateCount = Mathf.Max(1, EditorGUILayout.IntField("Walk Candidate Count", cfg.walkCandidateCount));
-            cfg.startCoverStopSamples = Mathf.Max(1, EditorGUILayout.IntField("Start Cover Stop Samples", cfg.startCoverStopSamples));
-            cfg.walkSeed = EditorGUILayout.IntField("Walk Seed", cfg.walkSeed);
-            cfg.maxStepsPerPath = Mathf.Max(1, EditorGUILayout.IntField("Max Steps Per Path", cfg.maxStepsPerPath));
-            cfg.closureSnapThreshold = Mathf.Max(0f, EditorGUILayout.FloatField("闭环合并吸附阈值 (×步距)", cfg.closureSnapThreshold));
             // gApplySpacing 已移除：新防卷曲逻辑按"滞后 2 步"逐点盖胶囊，不再需要盖章间距阈值。
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
             cfg.textureSmoothingRadius = Mathf.Max(0, EditorGUILayout.IntField("贴图平滑半径 (alphamap 像素)", cfg.textureSmoothingRadius));
@@ -1121,15 +1113,6 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.LabelField("道路生成参数", EditorStyles.boldLabel);
             layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
             layer.roadWidth = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Width (m)", layer.roadWidth));
-            layer.antiCurl = EditorGUILayout.Slider("抗卷曲系数 Anti-Curl (0~1)", layer.antiCurl, 0f, 1f);
-            EditorGUILayout.LabelField("实际禁区滞后距离 = 系数 × 步距 × 2", EditorStyles.miniLabel);
-            if (layer.antiCurl < 0.25f)
-                EditorGUILayout.HelpBox("抗卷曲效果较差：禁区滞后距离 < 0.5×步距，路网可能卷曲/重叠", MessageType.Warning);
-            else if (layer.antiCurl > 0.75f)
-                EditorGUILayout.HelpBox("路径生成较难：禁区滞后距离 > 1.5×步距，游走者可用空间变小", MessageType.Warning);
-            layer.antiCurlSteer = Mathf.Max(1f, EditorGUILayout.FloatField("抗卷曲引导系数 (≥1)", layer.antiCurlSteer));
-            layer.antiCurlSteerRange = Mathf.Max(0f, EditorGUILayout.FloatField("抗卷曲引导范围 (≥0)", layer.antiCurlSteerRange));
-            layer.roadFinalRemap = EditorGUILayout.CurveField("Road Final Remap", layer.roadFinalRemap);
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.Space(2);

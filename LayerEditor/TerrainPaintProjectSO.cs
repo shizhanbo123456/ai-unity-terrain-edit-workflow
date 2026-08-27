@@ -12,7 +12,7 @@ namespace AiTerrainWorkflow.LayerEditor
     [Serializable]
     public class TerrainPaintConfig
     {
-        [Header("道路骨架（旧随机游走字段仅为资产兼容保留）")]
+        [Header("道路骨架")]
         [Tooltip("道路候选连通区域的最小世界面积；更小的孤岛不生成道路")]
         [Min(0f)] public float minimumRoadRegionArea = 25f;
         [Tooltip("区域面积 / 最大内切直径平方的最小值；越大越偏向狭长区域，1 左右会接受近方形区域")]
@@ -23,23 +23,6 @@ namespace AiTerrainWorkflow.LayerEditor
         [Min(0f)] public float spurLengthToWidthRatio = 1.25f;
         [Tooltip("道路半径与 Layer 边界之间保留的世界距离，防止路面盖章越界")]
         [Min(0f)] public float roadBoundaryMargin = 0.25f;
-
-        [Header("旧随机游走参数（已弃用）")]
-        [Tooltip("相邻游走点的最小距离（世界距离）；也是候选采样邻域半径")]
-        public float roadStep = 2f;
-        [Tooltip("完全随机找起点的尝试次数上限")]
-        public int walkStartTries = 10;
-        [Tooltip("游走时每个当前点周围取多少个候选点")]
-        public int walkCandidateCount = 8;
-        [Tooltip("选起点时周围取多少个候选点用于「覆盖停止」判断")]
-        public int startCoverStopSamples = 8;
-        [Tooltip("随机游走统一种子（与贴图种子完全独立）")]
-        public int walkSeed = 0;
-        [Tooltip("单条路径步数硬上限（安全护栏）")]
-        public int maxStepsPerPath = 256;
-        [Min(0f)]
-        [Tooltip("闭环合并吸附阈值：路径末点与任意历史点距离 < 阈值 × stepWorld 时接入网络（默认 2 = 2 倍步距；0 = 关闭闭环合并）")]
-        public float closureSnapThreshold = 2f;
 
         [Header("贴图混合")]
         [Tooltip("value-noise 加权混合的空间频率（世界距离）")]
@@ -58,7 +41,7 @@ namespace AiTerrainWorkflow.LayerEditor
     /// 字段按区域、高度、贴图、散布、摆件和定点工作流划分：
     ///   - 区域编辑：层次图（layerMap，绘画画布）
     ///   - 高度编辑：heightSeed / heightScale / smoothStep / smoothIterations
-    ///   - 贴图编辑：TerrainPaintConfig（随机游走/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
+    ///   - 贴图编辑：TerrainPaintConfig（道路骨架提取/贴图混合/坐标换算）+ 全局贴图种子 + 两个 TerrainLayer 池 + 邻接组
     ///   - 散布编辑：全局 scatterSeed + 多个 ScatterConfigSO 生成组
     /// </summary>
     [CreateAssetMenu(fileName = "TerrainPaintProject", menuName = "AiTerrainWorkflow/Layer Editor/Terrain Paint Project")]

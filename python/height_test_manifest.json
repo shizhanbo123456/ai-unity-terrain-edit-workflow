@@ -6,39 +6,492 @@
   "heightScale": 0.02,
   "smoothStep": 1,
   "smoothIterations": 8,
-  "paintConfig": {"roadStep":2.0,"walkStartTries":10,"walkCandidateCount":8,"startCoverStopSamples":8,"walkSeed":7001,"maxStepsPerPath":256,"closureSnapThreshold":2,"noiseScale":1.0,"textureSmoothingRadius":1},
+  "paintConfig": {
+    "noiseScale": 1.0,
+    "textureSmoothingRadius": 1
+  },
   "naturalSeed": 101,
   "roadSeed": 202,
   "scatterSeed": 303,
   "propSeed": 404,
-  "naturalTerrainLayers": ["Assets/TerrainLayers/Grass.terrainlayer","Assets/TerrainLayers/Rock.terrainlayer"],
-  "roadTerrainLayers": ["Assets/TerrainLayers/Dirt.terrainlayer","Assets/TerrainLayers/StoneRoad.terrainlayer"],
+  "naturalTerrainLayers": [
+    "Assets/TerrainLayers/Grass.terrainlayer",
+    "Assets/TerrainLayers/Rock.terrainlayer"
+  ],
+  "roadTerrainLayers": [
+    "Assets/TerrainLayers/Dirt.terrainlayer",
+    "Assets/TerrainLayers/StoneRoad.terrainlayer"
+  ],
   "layers": [
-    {"index":0,"name":"Transparent","color":[0,0,0,0],"heightRange":[0,0],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0,"inTangent":1,"outTangent":1,"inWeight":0,"outWeight":0,"weightedMode":0},{"time":1,"value":1,"inTangent":1,"outTangent":1,"inWeight":0,"outWeight":0,"weightedMode":0}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":1,"name":"Grassland_Base","color":[0.35,0.75,0.25,1],"heightRange":[0,26],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0,"inTangent":1,"outTangent":1,"inWeight":0,"outWeight":0,"weightedMode":0},{"time":1,"value":1,"inTangent":1,"outTangent":1,"inWeight":0,"outWeight":0,"weightedMode":0}],"naturalWeights":[10,2],"roadWeights":[10,1]},
-    {"index":2,"name":"Mountains","color":[0.90,0.30,0.30,1],"heightRange":[26,85],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":3,"name":"Plateau","color":[0.30,0.55,0.95,1],"heightRange":[16,48],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":4,"name":"Basin","color":[0.95,0.75,0.20,1],"heightRange":[0,8],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":5,"name":"Layer05","color":[0.65,0.35,0.85,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":6,"name":"Layer06","color":[0.20,0.80,0.80,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":7,"name":"Layer07","color":[0.95,0.45,0.70,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":8,"name":"Layer08","color":[0.55,0.75,0.25,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":9,"name":"Layer09","color":[0.85,0.55,0.20,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":10,"name":"Layer10","color":[0.25,0.45,0.75,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":11,"name":"Layer11","color":[0.75,0.25,0.45,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":12,"name":"Layer12","color":[0.20,0.65,0.50,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":13,"name":"Layer13","color":[0.55,0.35,0.25,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":14,"name":"Layer14","color":[0.45,0.45,0.45,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]},
-    {"index":15,"name":"Layer15","color":[0.95,0.95,0.95,1],"heightRange":[0,1],"generateRoad":false,"roadWidth":0,"antiCurl":0,"roadFinalRemap":[{"time":0,"value":0},{"time":1,"value":1}],"naturalWeights":[0,0],"roadWeights":[0,0]}
+    {
+      "index": 0,
+      "name": "Transparent",
+      "color": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "heightRange": [
+        0,
+        0
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 1,
+      "name": "Grassland_Base",
+      "color": [
+        0.35,
+        0.75,
+        0.25,
+        1
+      ],
+      "heightRange": [
+        0,
+        26
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        10,
+        2
+      ],
+      "roadWeights": [
+        10,
+        1
+      ]
+    },
+    {
+      "index": 2,
+      "name": "Mountains",
+      "color": [
+        0.9,
+        0.3,
+        0.3,
+        1
+      ],
+      "heightRange": [
+        26,
+        85
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 3,
+      "name": "Plateau",
+      "color": [
+        0.3,
+        0.55,
+        0.95,
+        1
+      ],
+      "heightRange": [
+        16,
+        48
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 4,
+      "name": "Basin",
+      "color": [
+        0.95,
+        0.75,
+        0.2,
+        1
+      ],
+      "heightRange": [
+        0,
+        8
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 5,
+      "name": "Layer05",
+      "color": [
+        0.65,
+        0.35,
+        0.85,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 6,
+      "name": "Layer06",
+      "color": [
+        0.2,
+        0.8,
+        0.8,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 7,
+      "name": "Layer07",
+      "color": [
+        0.95,
+        0.45,
+        0.7,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 8,
+      "name": "Layer08",
+      "color": [
+        0.55,
+        0.75,
+        0.25,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 9,
+      "name": "Layer09",
+      "color": [
+        0.85,
+        0.55,
+        0.2,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 10,
+      "name": "Layer10",
+      "color": [
+        0.25,
+        0.45,
+        0.75,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 11,
+      "name": "Layer11",
+      "color": [
+        0.75,
+        0.25,
+        0.45,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 12,
+      "name": "Layer12",
+      "color": [
+        0.2,
+        0.65,
+        0.5,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 13,
+      "name": "Layer13",
+      "color": [
+        0.55,
+        0.35,
+        0.25,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 14,
+      "name": "Layer14",
+      "color": [
+        0.45,
+        0.45,
+        0.45,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    },
+    {
+      "index": 15,
+      "name": "Layer15",
+      "color": [
+        0.95,
+        0.95,
+        0.95,
+        1
+      ],
+      "heightRange": [
+        0,
+        1
+      ],
+      "generateRoad": false,
+      "roadWidth": 0,
+      "naturalWeights": [
+        0,
+        0
+      ],
+      "roadWeights": [
+        0,
+        0
+      ]
+    }
   ],
   "adjacencyGroups": [],
   "prefabs": [],
   "areaOperations": [
-    {"type":"Rectangle","a":[0,0],"b":[511,511],"c":[0,0],"radius":0,"layerIndex":1},
-    {"type":"Triangle","a":[100,50],"b":[290,50],"c":[195,260],"radius":0,"layerIndex":2},
-    {"type":"Triangle","a":[330,70],"b":[470,70],"c":[400,230],"radius":0,"layerIndex":2},
-    {"type":"Rectangle","a":[300,270],"b":[505,505],"radius":0,"layerIndex":3},
-    {"type":"Triangle","a":[50,330],"b":[240,330],"c":[140,505],"radius":0,"layerIndex":4}
+    {
+      "type": "Rectangle",
+      "a": [
+        0,
+        0
+      ],
+      "b": [
+        511,
+        511
+      ],
+      "c": [
+        0,
+        0
+      ],
+      "radius": 0,
+      "layerIndex": 1
+    },
+    {
+      "type": "Triangle",
+      "a": [
+        100,
+        50
+      ],
+      "b": [
+        290,
+        50
+      ],
+      "c": [
+        195,
+        260
+      ],
+      "radius": 0,
+      "layerIndex": 2
+    },
+    {
+      "type": "Triangle",
+      "a": [
+        330,
+        70
+      ],
+      "b": [
+        470,
+        70
+      ],
+      "c": [
+        400,
+        230
+      ],
+      "radius": 0,
+      "layerIndex": 2
+    },
+    {
+      "type": "Rectangle",
+      "a": [
+        300,
+        270
+      ],
+      "b": [
+        505,
+        505
+      ],
+      "radius": 0,
+      "layerIndex": 3
+    },
+    {
+      "type": "Triangle",
+      "a": [
+        50,
+        330
+      ],
+      "b": [
+        240,
+        330
+      ],
+      "c": [
+        140,
+        505
+      ],
+      "radius": 0,
+      "layerIndex": 4
+    }
   ],
   "scatterGroups": [],
   "propGroups": [],
