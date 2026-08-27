@@ -235,6 +235,388 @@ namespace AiTerrainWorkflow.LayerEditor
         /// </summary>
         public static void GenerateRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
             TerrainPaintConfig cfg, List<LayerConfigSO> layers, Vector2 pixelWorldSize,
+            List<RoadAnchorConfig> anchors, int roadSeed,
+            out float[] g, out float[] b)
+        {
+            var usableAnchors = CollectGroupAnchors(anchors, layerIds, w, h, group, pixelWorldSize);
+            if (usableAnchors.Count == 0)
+            {
+                GenerateSkeletonRoads(layerIds, r, w, h, group, cfg, layers, pixelWorldSize, out g, out b);
+                return;
+            }
+
+            GenerateAnchorRoads(layerIds, r, w, h, group, cfg, layers, pixelWorldSize,
+                usableAnchors, roadSeed, out g, out b);
+        }
+
+        private sealed class RoadPort
+        {
+            public int anchorIndex;
+            public Vector2 position;
+            public Vector2 outward;
+            public bool connected;
+        }
+
+        private static List<RoadPort> CollectGroupAnchors(List<RoadAnchorConfig> anchors,
+            int[] layerIds, int w, int h, List<int> group, Vector2 pixelWorldSize)
+        {
+            var ports = new List<RoadPort>();
+            if (anchors == null) return ports;
+            float extentX = Mathf.Max(pixelWorldSize.x, pixelWorldSize.x * (w - 1));
+            float extentZ = Mathf.Max(pixelWorldSize.y, pixelWorldSize.y * (h - 1));
+            for (int a = 0; a < anchors.Count; a++)
+            {
+                RoadAnchorConfig anchor = anchors[a];
+                if (anchor == null || anchor.validDirections == null) continue;
+                Vector2 normalized = new Vector2(Mathf.Clamp01(anchor.normalizedPosition.x),
+                    Mathf.Clamp01(anchor.normalizedPosition.y));
+                int px = Mathf.Clamp(Mathf.RoundToInt(normalized.x * (w - 1)), 0, w - 1);
+                int py = Mathf.Clamp(Mathf.RoundToInt(normalized.y * (h - 1)), 0, h - 1);
+                if (!InGroup(layerIds[py * w + px], group)) continue;
+                Vector2 position = new Vector2(normalized.x * extentX, normalized.y * extentZ);
+                for (int d = 0; d < anchor.validDirections.Count; d++)
+                {
+                    Vector2 direction = anchor.validDirections[d];
+                    if (direction.sqrMagnitude < 0.0001f) continue;
+                    ports.Add(new RoadPort
+                    {
+                        anchorIndex = a,
+                        position = position,
+                        outward = direction.normalized,
+                    });
+                }
+            }
+            return ports;
+        }
+
+        private static void GenerateAnchorRoads(int[] layerIds, float[] clearance, int w, int h,
+            List<int> group, TerrainPaintConfig cfg, List<LayerConfigSO> layers,
+            Vector2 pixelWorldSize, List<RoadPort> ports, int roadSeed,
+            out float[] centerline, out float[] road)
+        {
+            centerline = new float[w * h];
+            road = new float[w * h];
+            var allowed = new bool[w * h];
+            for (int i = 0; i < allowed.Length; i++) allowed[i] = InGroup(layerIds[i], group);
+
+            for (int startIndex = 0; startIndex < ports.Count; startIndex++)
+            {
+                RoadPort start = ports[startIndex];
+                if (start.connected) continue;
+                var points = ExtendRoad(startIndex, ports, clearance, layerIds, w, h, cfg, layers,
+                    pixelWorldSize, roadSeed);
+                if (points.Count < 2) continue;
+                RasterizePolyline(points, centerline, road, allowed, clearance, layerIds, w, h,
+                    cfg, layers, pixelWorldSize);
+            }
+        }
+
+        private static List<Vector2> ExtendRoad(int startIndex, List<RoadPort> ports,
+            float[] clearance, int[] layerIds, int w, int h, TerrainPaintConfig cfg,
+            List<LayerConfigSO> layers, Vector2 pixelWorldSize, int roadSeed)
+        {
+            RoadPort start = ports[startIndex];
+            var points = new List<Vector2> { start.position };
+            Vector2 position = start.position;
+            Vector2 direction = start.outward;
+            float step = Mathf.Max(0.1f, cfg.roadExtensionStep);
+            int maxSteps = Mathf.Max(1, cfg.maximumRoadSteps);
+            int lastAvoidanceSign = 1;
+            var random = new System.Random(unchecked(roadSeed * 486187739 + startIndex * 16777619 + 31));
+            int curvatureDirection = random.NextDouble() < 0.5 ? -1 : 1;
+            float walkTurnAngle = 0f;
+
+            if (!IsSegmentLegal(position, position, clearance, layerIds, w, h, layers,
+                    cfg.roadBoundaryMargin, pixelWorldSize))
+                return points;
+
+            for (int iteration = 0; iteration < maxSteps; iteration++)
+            {
+                bool usedFreeWalk = false;
+                int targetIndex = FindAnchorTarget(startIndex, position, direction, ports, cfg);
+                if (targetIndex >= 0)
+                {
+                    RoadPort target = ports[targetIndex];
+                    float distance = Vector2.Distance(position, target.position);
+                    var bezier = BuildBezier(position, direction, target.position, -target.outward);
+                    bool curveLegal = IsBezierLegal(bezier, clearance, layerIds, w, h, layers,
+                        cfg.roadBoundaryMargin, pixelWorldSize, step);
+                    if (curveLegal && distance <= Mathf.Max(0f, cfg.bezierCompletionDistance))
+                    {
+                        AppendBezier(points, bezier, step);
+                        start.connected = true;
+                        target.connected = true;
+                        return points;
+                    }
+
+                    Vector2 desired;
+                    if (curveLegal)
+                    {
+                        Vector2 guide = EvaluateBezier(bezier, Mathf.Clamp(cfg.bezierGuideLookAhead, 0.01f, 0.5f));
+                        desired = (guide - position).normalized;
+                    }
+                    else
+                    {
+                        float cross = Cross(direction, target.position - position);
+                        int sign = Mathf.Abs(cross) > 0.0001f ? (cross > 0f ? -1 : 1) : lastAvoidanceSign;
+                        lastAvoidanceSign = sign;
+                        desired = Rotate(direction, sign * Mathf.Max(0f, cfg.failedProbeAvoidanceAngle));
+                    }
+                    direction = RotateTowards(direction, desired, cfg.anchorGuideMaxTurnAngle);
+                }
+                else
+                {
+                    float required = RequiredClearanceAt(position, layerIds, w, h, layers,
+                        cfg.roadBoundaryMargin, pixelWorldSize);
+                    float boundarySpace = Sample(clearance, position, w, h, pixelWorldSize) - required;
+                    Vector2 baseDirection = direction;
+                    float maxTurn = Mathf.Max(0f, cfg.freeMaxTurnAngle);
+                    if (boundarySpace <= Mathf.Max(0f, cfg.boundaryFollowDistance))
+                    {
+                        Vector2 normal = ClearanceGradient(clearance, position, w, h, pixelWorldSize);
+                        if (normal.sqrMagnitude > 0.0001f)
+                        {
+                            Vector2 tangent = new Vector2(-normal.y, normal.x).normalized;
+                            if (Vector2.Dot(tangent, direction) < 0f) tangent = -tangent;
+                            baseDirection = tangent;
+                        }
+                        maxTurn = 0f;
+                    }
+                    else
+                    {
+                        // 普通游走才应用累计偏转；锚点引导和边界切线拥有更高优先级。
+                        baseDirection = Rotate(direction,
+                            Mathf.Clamp(walkTurnAngle, -maxTurn, maxTurn)).normalized;
+                        usedFreeWalk = true;
+                    }
+                    direction = FindLegalDirection(position, baseDirection, maxTurn, step,
+                        Mathf.Max(1f, cfg.directionSearchStep), clearance, layerIds, w, h,
+                        layers, cfg.roadBoundaryMargin, pixelWorldSize);
+                    if (direction.sqrMagnitude < 0.0001f) break;
+                }
+
+                Vector2 next = position + direction.normalized * step;
+                if (!IsSegmentLegal(position, next, clearance, layerIds, w, h, layers,
+                        cfg.roadBoundaryMargin, pixelWorldSize))
+                {
+                    Vector2 alternative = FindLegalDirection(position, direction,
+                        Mathf.Max(0f, cfg.freeMaxTurnAngle), step,
+                        Mathf.Max(1f, cfg.directionSearchStep), clearance, layerIds, w, h,
+                        layers, cfg.roadBoundaryMargin, pixelWorldSize);
+                    if (alternative.sqrMagnitude < 0.0001f) break;
+                    direction = alternative;
+                    next = position + direction * step;
+                }
+
+                if (CreatesShortLoop(points, next, step)) break;
+                points.Add(next);
+                position = next;
+
+                if (usedFreeWalk)
+                {
+                    float minCurvature = Mathf.Min(cfg.roadWalkCurvatureRange.x, cfg.roadWalkCurvatureRange.y);
+                    float maxCurvature = Mathf.Max(cfg.roadWalkCurvatureRange.x, cfg.roadWalkCurvatureRange.y);
+                    float sampled = Mathf.Lerp(minCurvature, maxCurvature, (float)random.NextDouble());
+                    walkTurnAngle += curvatureDirection * Mathf.Abs(sampled);
+
+                    // 先决定下一次累计是加还是减，再按独立概率直接翻转当前累计偏转角。
+                    if (random.NextDouble() < Mathf.Clamp01(cfg.roadWalkCurvatureDirectionSwitchProbability))
+                        curvatureDirection = -curvatureDirection;
+                    if (random.NextDouble() < Mathf.Clamp01(cfg.roadWalkDirectionFlipProbability))
+                        walkTurnAngle = -walkTurnAngle;
+                    walkTurnAngle = Mathf.Clamp(walkTurnAngle,
+                        -Mathf.Max(0f, cfg.freeMaxTurnAngle), Mathf.Max(0f, cfg.freeMaxTurnAngle));
+                }
+            }
+            return points;
+        }
+
+        private struct BezierCurve { public Vector2 p0, p1, p2, p3; }
+
+        private static BezierCurve BuildBezier(Vector2 p0, Vector2 startTangent,
+            Vector2 p3, Vector2 endTangent)
+        {
+            float length = Vector2.Distance(p0, p3);
+            float handle = Mathf.Clamp(length * 0.35f, 0.5f, Mathf.Max(0.5f, length * 0.6f));
+            return new BezierCurve
+            {
+                p0 = p0,
+                p1 = p0 + startTangent.normalized * handle,
+                p2 = p3 - endTangent.normalized * handle,
+                p3 = p3,
+            };
+        }
+
+        private static Vector2 EvaluateBezier(BezierCurve c, float t)
+        {
+            float u = 1f - t;
+            return u*u*u*c.p0 + 3f*u*u*t*c.p1 + 3f*u*t*t*c.p2 + t*t*t*c.p3;
+        }
+
+        private static bool IsBezierLegal(BezierCurve curve, float[] clearance, int[] layerIds,
+            int w, int h, List<LayerConfigSO> layers, float margin, Vector2 pixelWorldSize, float step)
+        {
+            float estimate = Vector2.Distance(curve.p0, curve.p1) + Vector2.Distance(curve.p1, curve.p2)
+                + Vector2.Distance(curve.p2, curve.p3);
+            int samples = Mathf.Max(4, Mathf.CeilToInt(estimate / Mathf.Max(0.1f, step * 0.5f)));
+            Vector2 previous = curve.p0;
+            for (int i = 1; i <= samples; i++)
+            {
+                Vector2 current = EvaluateBezier(curve, i / (float)samples);
+                if (!IsSegmentLegal(previous, current, clearance, layerIds, w, h, layers,
+                        margin, pixelWorldSize)) return false;
+                previous = current;
+            }
+            return true;
+        }
+
+        private static void AppendBezier(List<Vector2> points, BezierCurve curve, float step)
+        {
+            float estimate = Vector2.Distance(curve.p0, curve.p1) + Vector2.Distance(curve.p1, curve.p2)
+                + Vector2.Distance(curve.p2, curve.p3);
+            int samples = Mathf.Max(2, Mathf.CeilToInt(estimate / Mathf.Max(0.1f, step)));
+            for (int i = 1; i <= samples; i++) points.Add(EvaluateBezier(curve, i / (float)samples));
+        }
+
+        private static int FindAnchorTarget(int sourceIndex, Vector2 position, Vector2 direction,
+            List<RoadPort> ports, TerrainPaintConfig cfg)
+        {
+            int best = -1;
+            float bestScore = float.PositiveInfinity;
+            float probe = Mathf.Max(cfg.bezierProbeDistance, cfg.bezierCompletionDistance);
+            for (int i = 0; i < ports.Count; i++)
+            {
+                RoadPort candidate = ports[i];
+                if (i == sourceIndex || candidate.connected || candidate.anchorIndex == ports[sourceIndex].anchorIndex) continue;
+                Vector2 delta = candidate.position - position;
+                float distance = delta.magnitude;
+                if (distance < 0.001f || distance > probe) continue;
+                float arrivalAngle = Vector2.Angle(direction, -candidate.outward);
+                if (arrivalAngle > cfg.anchorSnapAngle) continue;
+                float forward = Vector2.Dot(direction, delta / distance);
+                if (forward <= 0f) continue;
+                float score = distance + arrivalAngle * 0.2f - forward * probe * 0.25f;
+                if (score < bestScore) { bestScore = score; best = i; }
+            }
+            return best;
+        }
+
+        private static Vector2 FindLegalDirection(Vector2 position, Vector2 baseDirection,
+            float maxTurn, float step, float angleStep, float[] clearance, int[] layerIds,
+            int w, int h, List<LayerConfigSO> layers, float margin, Vector2 pixelWorldSize)
+        {
+            int count = Mathf.CeilToInt(maxTurn / angleStep);
+            for (int ring = 0; ring <= count; ring++)
+            {
+                int variants = ring == 0 ? 1 : 2;
+                for (int variant = 0; variant < variants; variant++)
+                {
+                    float angle = ring == 0 ? 0f : ring * angleStep * (variant == 0 ? 1f : -1f);
+                    if (Mathf.Abs(angle) > maxTurn + 0.001f) continue;
+                    Vector2 candidate = Rotate(baseDirection, angle).normalized;
+                    if (IsSegmentLegal(position, position + candidate * step, clearance,
+                            layerIds, w, h, layers, margin, pixelWorldSize)) return candidate;
+                }
+            }
+            return Vector2.zero;
+        }
+
+        private static bool IsSegmentLegal(Vector2 a, Vector2 b, float[] clearance,
+            int[] layerIds, int w, int h, List<LayerConfigSO> layers, float margin,
+            Vector2 pixelWorldSize)
+        {
+            float length = Vector2.Distance(a, b);
+            float sampleStep = Mathf.Max(0.1f, Mathf.Min(pixelWorldSize.x, pixelWorldSize.y) * 0.5f);
+            int samples = Mathf.Max(1, Mathf.CeilToInt(length / sampleStep));
+            for (int i = 0; i <= samples; i++)
+            {
+                Vector2 p = Vector2.Lerp(a, b, i / (float)samples);
+                float required = RequiredClearanceAt(p, layerIds, w, h, layers, margin, pixelWorldSize);
+                if (required < 0f || Sample(clearance, p, w, h, pixelWorldSize) + 0.0001f < required)
+                    return false;
+            }
+            return true;
+        }
+
+        private static float RequiredClearanceAt(Vector2 position, int[] layerIds, int w, int h,
+            List<LayerConfigSO> layers, float margin, Vector2 pixelWorldSize)
+        {
+            int x = Mathf.RoundToInt(position.x / Mathf.Max(0.0001f, pixelWorldSize.x));
+            int y = Mathf.RoundToInt(position.y / Mathf.Max(0.0001f, pixelWorldSize.y));
+            if (x < 0 || x >= w || y < 0 || y >= h) return -1f;
+            int layer = layerIds[y * w + x];
+            if (layer < 0 || layer >= layers.Count || layers[layer] == null || !layers[layer].generateRoad) return -1f;
+            return Mathf.Max(0f, layers[layer].roadWidth) + Mathf.Max(0f, margin);
+        }
+
+        private static float Sample(float[] values, Vector2 position, int w, int h, Vector2 pixelWorldSize)
+        {
+            int x = Mathf.RoundToInt(position.x / Mathf.Max(0.0001f, pixelWorldSize.x));
+            int y = Mathf.RoundToInt(position.y / Mathf.Max(0.0001f, pixelWorldSize.y));
+            if (x < 0 || x >= w || y < 0 || y >= h) return 0f;
+            return values[y * w + x];
+        }
+
+        private static Vector2 ClearanceGradient(float[] values, Vector2 position, int w, int h,
+            Vector2 pixelWorldSize)
+        {
+            Vector2 dx = new Vector2(pixelWorldSize.x, 0f);
+            Vector2 dz = new Vector2(0f, pixelWorldSize.y);
+            return new Vector2(Sample(values, position + dx, w, h, pixelWorldSize) - Sample(values, position - dx, w, h, pixelWorldSize),
+                Sample(values, position + dz, w, h, pixelWorldSize) - Sample(values, position - dz, w, h, pixelWorldSize)).normalized;
+        }
+
+        private static bool CreatesShortLoop(List<Vector2> points, Vector2 next, float step)
+        {
+            int ignoreRecent = 8;
+            float thresholdSquared = step * step * 0.5f;
+            for (int i = 0; i < points.Count - ignoreRecent; i++)
+                if ((points[i] - next).sqrMagnitude < thresholdSquared) return true;
+            return false;
+        }
+
+        private static Vector2 RotateTowards(Vector2 from, Vector2 to, float maxDegrees)
+        {
+            float signed = Vector2.SignedAngle(from, to);
+            return Rotate(from, Mathf.Clamp(signed, -Mathf.Max(0f, maxDegrees), Mathf.Max(0f, maxDegrees))).normalized;
+        }
+
+        private static Vector2 Rotate(Vector2 value, float degrees)
+        {
+            float radians = degrees * Mathf.Deg2Rad;
+            float c = Mathf.Cos(radians), s = Mathf.Sin(radians);
+            return new Vector2(value.x * c - value.y * s, value.x * s + value.y * c);
+        }
+
+        private static float Cross(Vector2 a, Vector2 b) { return a.x * b.y - a.y * b.x; }
+
+        private static void RasterizePolyline(List<Vector2> points, float[] centerline, float[] road,
+            bool[] allowed, float[] clearance, int[] layerIds, int w, int h, TerrainPaintConfig cfg,
+            List<LayerConfigSO> layers, Vector2 pixelWorldSize)
+        {
+            float sampleStep = Mathf.Max(0.1f, Mathf.Min(pixelWorldSize.x, pixelWorldSize.y) * 0.5f);
+            for (int segment = 1; segment < points.Count; segment++)
+            {
+                Vector2 a = points[segment - 1], b = points[segment];
+                int samples = Mathf.Max(1, Mathf.CeilToInt(Vector2.Distance(a, b) / sampleStep));
+                for (int i = 0; i <= samples; i++)
+                {
+                    Vector2 p = Vector2.Lerp(a, b, i / (float)samples);
+                    int x = Mathf.RoundToInt(p.x / pixelWorldSize.x);
+                    int y = Mathf.RoundToInt(p.y / pixelWorldSize.y);
+                    if (x < 0 || x >= w || y < 0 || y >= h) continue;
+                    int idx = y * w + x;
+                    centerline[idx] = 1f;
+                    float preferredRadius = RequiredClearanceAt(p, layerIds, w, h, layers, 0f, pixelWorldSize);
+                    float safeRadius = Mathf.Max(0f, clearance[idx] - cfg.roadBoundaryMargin);
+                    StampRoadEllipse(road, allowed, w, h, x, y,
+                        Mathf.Min(Mathf.Max(0f, preferredRadius), safeRadius), pixelWorldSize);
+                }
+            }
+        }
+
+        private static void GenerateSkeletonRoads(int[] layerIds, float[] r, int w, int h, List<int> group,
+            TerrainPaintConfig cfg, List<LayerConfigSO> layers, Vector2 pixelWorldSize,
             out float[] g, out float[] b)
         {
             g = new float[w * h];
@@ -477,7 +859,7 @@ namespace AiTerrainWorkflow.LayerEditor
                     r[i] = Mathf.Max(r[i], rg[i]);
 
                 GenerateRoads(layerIds, rg, w, h, group, project.config, project.layers,
-                    pixelWorldSize, out var gg, out var bb);
+                    pixelWorldSize, project.roadAnchors, project.roadSeed, out var gg, out var bb);
                 for (int i = 0; i < g.Length; i++)
                 {
                     g[i] = Mathf.Max(g[i], gg[i]);

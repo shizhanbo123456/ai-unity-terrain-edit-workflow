@@ -565,6 +565,17 @@ namespace AiTerrainWorkflow.LayerEditor
               .Append(";hsc=").Append(_config.heightScale.ToString("R", CultureInfo.InvariantCulture))
               .Append(";ss=").Append(_config.scatterSeed)
               .Append(";ps=").Append(_config.propSeed)
+              .Append(";rstep=").Append(_config.config.roadExtensionStep.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rwcurv=").Append(_config.config.roadWalkCurvatureRange.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+              .Append(_config.config.roadWalkCurvatureRange.y.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rwcs=").Append(_config.config.roadWalkCurvatureDirectionSwitchProbability.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rwflip=").Append(_config.config.roadWalkDirectionFlipProbability.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rbfd=").Append(_config.config.boundaryFollowDistance.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rfturn=").Append(_config.config.freeMaxTurnAngle.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";raturn=").Append(_config.config.anchorGuideMaxTurnAngle.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rbprobe=").Append(_config.config.bezierProbeDistance.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rbcomplete=").Append(_config.config.bezierCompletionDistance.ToString("R", CultureInfo.InvariantCulture))
+              .Append(";rsnap=").Append(_config.config.anchorSnapAngle.ToString("R", CultureInfo.InvariantCulture))
               .Append(';');
 
             for (int i = 0; i < _config.layers.Count; i++)
@@ -573,7 +584,20 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (layer == null) continue;
                 sb.Append("l").Append(i).Append(':')
                   .Append(layer.generateRoad ? 1 : 0).Append(',')
-                  .Append(layer.roadWidth.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(layer.roadWidth.ToString("R", CultureInfo.InvariantCulture)).Append(',');
+            }
+            for (int a = 0; _config.roadAnchors != null && a < _config.roadAnchors.Count; a++)
+            {
+                RoadAnchorConfig anchor = _config.roadAnchors[a];
+                if (anchor == null) continue;
+                sb.Append("ra").Append(a).Append(':')
+                  .Append(anchor.normalizedPosition.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                  .Append(anchor.normalizedPosition.y.ToString("R", CultureInfo.InvariantCulture)).Append(',');
+                if (anchor.validDirections != null)
+                    foreach (Vector2 direction in anchor.validDirections)
+                        sb.Append(direction.x.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                          .Append(direction.y.ToString("R", CultureInfo.InvariantCulture)).Append(',');
+                sb.Append(';');
             }
             for (int g = 0; g < _config.adjacencyGroups.Count; g++)
             {

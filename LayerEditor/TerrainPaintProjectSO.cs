@@ -5,6 +5,15 @@ using UnityEngine;
 
 namespace AiTerrainWorkflow.LayerEditor
 {
+    [Serializable]
+    public class RoadAnchorConfig
+    {
+        [Tooltip("地形 X/Z 范围内的归一化位置")]
+        public Vector2 normalizedPosition = new Vector2(0.5f, 0.5f);
+        [Tooltip("道路从锚点向外延伸的归一化 X/Z 方向；每个方向是独立端口")]
+        public List<Vector2> validDirections = new List<Vector2> { Vector2.right };
+    }
+
     /// <summary>
     /// 全局配置（TerrainPaintProjectSO 的一部分，非独立资产）。
     /// 参数语义见设计文档《混合距离场与路面生成工具_设计文档(2).md》。
@@ -12,6 +21,25 @@ namespace AiTerrainWorkflow.LayerEditor
     [Serializable]
     public class TerrainPaintConfig
     {
+        [Header("锚点道路延伸")]
+        [Min(0.1f)] public float roadExtensionStep = 1f;
+        [Tooltip("自由游走每步累计偏转角所使用的曲率采样范围（度/步，计算时取采样值绝对值）")]
+        public Vector2 roadWalkCurvatureRange = new Vector2(-1f, 1f);
+        [Tooltip("每步切换累计偏转角加/减方向的概率")]
+        [Range(0f, 1f)] public float roadWalkCurvatureDirectionSwitchProbability = 0.05f;
+        [Tooltip("每步将当前累计偏转角乘以 -1 的概率")]
+        [Range(0f, 1f)] public float roadWalkDirectionFlipProbability = 0.05f;
+        [Min(0f)] public float boundaryFollowDistance = 3f;
+        [Range(0f, 180f)] public float freeMaxTurnAngle = 90f;
+        [Range(0f, 180f)] public float anchorGuideMaxTurnAngle = 12f;
+        [Range(1f, 90f)] public float directionSearchStep = 5f;
+        [Min(0f)] public float bezierProbeDistance = 30f;
+        [Min(0f)] public float bezierCompletionDistance = 12f;
+        [Range(0f, 180f)] public float anchorSnapAngle = 35f;
+        [Range(0.01f, 0.5f)] public float bezierGuideLookAhead = 0.15f;
+        [Range(0f, 90f)] public float failedProbeAvoidanceAngle = 10f;
+        [Min(1)] public int maximumRoadSteps = 4096;
+
         [Header("道路骨架")]
         [Tooltip("道路候选连通区域的最小世界面积；更小的孤岛不生成道路")]
         [Min(0f)] public float minimumRoadRegionArea = 25f;
@@ -112,6 +140,9 @@ namespace AiTerrainWorkflow.LayerEditor
 
         [Tooltip("邻接组（组合层级分组）：每个组是一个层级索引列表，如 {{1,2,3},{4,5}}。同一层级不可出现在多个组中（会校验报错）。")]
         public List<List<int>> adjacencyGroups = new List<List<int>>();
+
+        [Tooltip("道路锚点；位置为地形归一化 X/Z 坐标，每个有效方向作为独立道路端口")]
+        public List<RoadAnchorConfig> roadAnchors = new List<RoadAnchorConfig>();
 
         // ---------- 散布编辑 ----------
 
@@ -284,12 +315,9 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             if (string.IsNullOrEmpty(key)) return null;
 
-            // 运行时优先 TextAsset（打包可读）
-            var entry = GetMapDataRef(key);
-            if (entry != null && entry.file != null)
-                return CsvArrayCodec.Decode(entry.file.text);
-
 #if UNITY_EDITOR
+            // 编辑器内优先读磁盘：同一帧刚写入的 MapData 可能尚未完成 TextAsset 重导入，
+            // 若先读引用会拿到旧内容，导致 Bridge 烘焙结果与随后 Terrain 应用不一致。
             string dir = MapDataDirAbsolute();
             if (!string.IsNullOrEmpty(dir))
             {
@@ -298,6 +326,10 @@ namespace AiTerrainWorkflow.LayerEditor
                     return store.Read(key);
             }
 #endif
+            // Player 中读取随包发布的 TextAsset。
+            var entry = GetMapDataRef(key);
+            if (entry != null && entry.file != null)
+                return CsvArrayCodec.Decode(entry.file.text);
             return null;
         }
 

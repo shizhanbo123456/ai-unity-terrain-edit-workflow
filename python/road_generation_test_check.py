@@ -41,6 +41,35 @@ def component_count(mask: np.ndarray) -> int:
     return count
 
 
+def curved_component_count(mask: np.ndarray, minimum_points: int = 80, minimum_ratio: float = 0.004) -> int:
+    """Count long 8-connected centerlines whose minor/major PCA variance proves visible curvature."""
+    visited = np.zeros(mask.shape, dtype=bool)
+    height, width = mask.shape
+    curved = 0
+    for y, x in zip(*np.nonzero(mask)):
+        if visited[y, x]:
+            continue
+        points = []
+        visited[y, x] = True
+        queue = deque([(y, x)])
+        while queue:
+            cy, cx = queue.popleft()
+            points.append((cx, cy))
+            for ny in range(cy - 1, cy + 2):
+                for nx in range(cx - 1, cx + 2):
+                    if (0 <= ny < height and 0 <= nx < width and mask[ny, nx]
+                            and not visited[ny, nx]):
+                        visited[ny, nx] = True
+                        queue.append((ny, nx))
+        if len(points) < minimum_points:
+            continue
+        covariance = np.cov(np.asarray(points, dtype=np.float32).T)
+        eigenvalues = np.linalg.eigvalsh(covariance)
+        if eigenvalues[-1] > 0 and eigenvalues[0] / eigenvalues[-1] >= minimum_ratio:
+            curved += 1
+    return curved
+
+
 def colorize(values: np.ndarray, color: tuple[int, int, int]) -> np.ndarray:
     maximum = float(values.max())
     normalized = values / maximum if maximum > 0 else values
@@ -70,12 +99,11 @@ def main() -> int:
     total_road = int(road_mask.sum())
     assertions = {
         "road_is_non_empty": total_road > 0,
-        # Capsule stamping may extend slightly beyond the semantic boundary by roadWidth.
-        "boundary_spill_is_limited": int(np.count_nonzero(road_mask & transparent)) / max(1, total_road) < 0.10,
+        "road_stays_in_legal_layers": not np.any(road_mask & transparent),
         "wide_layer_has_road": bool(np.any(road_mask & (layer == 1))),
         "narrow_layer_has_road": bool(np.any(road_mask & (layer == 2))),
-        "isolated_island_has_road": bool(np.any(road_mask[174:223, 179:229] & (layer[174:223, 179:229] == 2))),
         "occupancy_is_non_empty": bool(np.any(occupancy > 0.5)),
+        "multiple_curved_anchor_paths_exist": curved_component_count(occupancy > 0.5) >= 2,
         "distance_is_non_empty": float(distance.max()) > 0,
         "off_road_is_non_empty": float(off_road.max()) > 0,
     }
@@ -104,7 +132,7 @@ def main() -> int:
         panels = [
             (overlay, "LayerMap + Road"),
             (colorize(road, (255, 245, 90)), "Road Mask"),
-            (colorize(occupancy, (255, 90, 70)), "Pruned Centerline Skeleton"),
+            (colorize(occupancy, (255, 90, 70)), "Generated Anchor Centerlines"),
             (colorize(off_road, (70, 190, 255)), "Off-road Distance"),
         ]
         scale = 2

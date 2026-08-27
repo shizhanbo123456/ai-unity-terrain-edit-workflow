@@ -7,6 +7,20 @@
   "smoothStep": 2,
   "smoothIterations": 3,
   "paintConfig": {
+    "roadExtensionStep": 1.0,
+    "roadWalkCurvatureRange": [-1.0, 1.0],
+    "roadWalkCurvatureDirectionSwitchProbability": 0.05,
+    "roadWalkDirectionFlipProbability": 0.05,
+    "boundaryFollowDistance": 5.0,
+    "freeMaxTurnAngle": 90.0,
+    "anchorGuideMaxTurnAngle": 8.0,
+    "directionSearchStep": 5.0,
+    "bezierProbeDistance": 30.0,
+    "bezierCompletionDistance": 15.0,
+    "anchorSnapAngle": 110.0,
+    "bezierGuideLookAhead": 0.15,
+    "failedProbeAvoidanceAngle": 10.0,
+    "maximumRoadSteps": 4096,
     "minimumRoadRegionArea": 25.0,
     "minimumCorridorAspect": 1.15,
     "minimumSkeletonBranchLength": 12.0,
@@ -122,7 +136,7 @@
         4
       ],
       "generateRoad": true,
-      "roadWidth": 7,
+      "roadWidth": 3,
       "naturalWeights": [
         7,
         2,
@@ -455,6 +469,14 @@
       ]
     }
   ],
+  "roadAnchors": [
+    { "position": [0.12, 0.16], "directions": [0.95, 0.30] },
+    { "position": [0.43, 0.84], "directions": [0.85, -0.52] },
+    { "position": [0.57, 0.14], "directions": [-0.15, 0.99] },
+    { "position": [0.88, 0.82], "directions": [-0.98, 0.18] },
+    { "position": [0.12, 0.62], "directions": [0.98, 0.20] },
+    { "position": [0.88, 0.40], "directions": [-0.30, -0.95] }
+  ],
   "prefabs": [],
   "areaOperations": [
     {
@@ -477,70 +499,86 @@
     {
       "type": "Triangle",
       "a": [
-        72,
-        18
+        18,
+        28
       ],
       "b": [
-        151,
-        18
+        238,
+        70
       ],
       "c": [
-        111,
-        152
+        76,
+        142
       ],
       "radius": 0,
       "layerIndex": 2
-    },
-    {
-      "type": "Rectangle",
-      "a": [
-        18,
-        150
-      ],
-      "b": [
-        151,
-        237
-      ],
-      "c": [
-        0,
-        0
-      ],
-      "radius": 0,
-      "layerIndex": 1
-    },
-    {
-      "type": "Rectangle",
-      "a": [
-        174,
-        166
-      ],
-      "b": [
-        235,
-        229
-      ],
-      "c": [
-        0,
-        0
-      ],
-      "radius": 0,
-      "layerIndex": 0
     },
     {
       "type": "Triangle",
       "a": [
-        179,
-        174
+        42,
+        218
       ],
       "b": [
-        228,
-        174
+        238,
+        132
       ],
       "c": [
-        204,
-        222
+        210,
+        238
       ],
       "radius": 0,
       "layerIndex": 2
+    },
+    {
+      "type": "Line",
+      "a": [
+        108,
+        86
+      ],
+      "b": [
+        150,
+        124
+      ],
+      "c": [
+        0,
+        0
+      ],
+      "radius": 13,
+      "layerIndex": 0
+    },
+    {
+      "type": "Line",
+      "a": [
+        92,
+        164
+      ],
+      "b": [
+        136,
+        190
+      ],
+      "c": [
+        0,
+        0
+      ],
+      "radius": 14,
+      "layerIndex": 0
+    },
+    {
+      "type": "Line",
+      "a": [188, 72],
+      "b": [205, 126],
+      "c": [0, 0],
+      "radius": 12,
+      "layerIndex": 0
+    },
+    {
+      "type": "Line",
+      "a": [34, 118],
+      "b": [62, 142],
+      "c": [0, 0],
+      "radius": 10,
+      "layerIndex": 0
     }
   ],
   "scatterGroups": [],

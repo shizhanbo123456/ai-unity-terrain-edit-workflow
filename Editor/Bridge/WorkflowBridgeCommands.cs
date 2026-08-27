@@ -26,6 +26,20 @@ namespace AiTerrainWorkflow.Editor.Bridge
     [Serializable]
     public sealed class PaintConfigSpec
     {
+        public float roadExtensionStep = 1f;
+        public float[] roadWalkCurvatureRange = { -1f, 1f };
+        public float roadWalkCurvatureDirectionSwitchProbability = 0.05f;
+        public float roadWalkDirectionFlipProbability = 0.05f;
+        public float boundaryFollowDistance = 3f;
+        public float freeMaxTurnAngle = 90f;
+        public float anchorGuideMaxTurnAngle = 12f;
+        public float directionSearchStep = 5f;
+        public float bezierProbeDistance = 30f;
+        public float bezierCompletionDistance = 12f;
+        public float anchorSnapAngle = 35f;
+        public float bezierGuideLookAhead = 0.15f;
+        public float failedProbeAvoidanceAngle = 10f;
+        public int maximumRoadSteps = 4096;
         public float minimumRoadRegionArea = 25f;
         public float minimumCorridorAspect = 1.15f;
         public float minimumSkeletonBranchLength = 12f;
@@ -33,6 +47,12 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public float roadBoundaryMargin = 0.25f;
         public float noiseScale = 1f;
         public int textureSmoothingRadius;
+    }
+    [Serializable]
+    public sealed class RoadAnchorSpec
+    {
+        public float[] position;
+        public float[] directions;
     }
     [Serializable]
     public sealed class LayerSpec
@@ -127,6 +147,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public string[] roadTerrainLayers;
         public LayerSpec[] layers;
         public IntGroupSpec[] adjacencyGroups;
+        public RoadAnchorSpec[] roadAnchors;
         public PrefabSpec[] prefabs;
         public PaintOperationSpec[] areaOperations;
         public ScatterGroupSpec[] scatterGroups;
@@ -251,7 +272,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
             TerrainBuilder builder = terrain.GetComponent<TerrainBuilder>() ?? terrain.gameObject.AddComponent<TerrainBuilder>();
             builder.Build(project, terrain, ParseEnum(manifest.applyThrough, TerrainWorkflowStage.FixedPointEdit));
             EditorUtility.SetDirty(terrain.gameObject);
-            return Result("run", AssetDatabase.GetAssetPath(project), "complete", 1);
+            return Result("run", AssetDatabase.GetAssetPath(project),
+                $"complete; roadAnchors={project.roadAnchors.Count}", 1);
         }
 
         private static TerrainPaintProjectSO ResolveOrCreateProject(string argumentPath, WorkflowManifest manifest)
@@ -310,6 +332,24 @@ namespace AiTerrainWorkflow.Editor.Bridge
             if (manifest.adjacencyGroups != null)
                 foreach (IntGroupSpec group in manifest.adjacencyGroups)
                     project.adjacencyGroups.Add(group?.values != null ? new List<int>(group.values) : new List<int>());
+            project.roadAnchors.Clear();
+            if (manifest.roadAnchors != null)
+                foreach (RoadAnchorSpec spec in manifest.roadAnchors)
+                {
+                    if (spec?.position == null || spec.position.Length < 2) continue;
+                    var anchor = new RoadAnchorConfig
+                    {
+                        normalizedPosition = new Vector2(spec.position[0], spec.position[1]),
+                        validDirections = new List<Vector2>(),
+                    };
+                    if (spec.directions != null)
+                        for (int i = 0; i + 1 < spec.directions.Length; i += 2)
+                        {
+                            Vector2 direction = new Vector2(spec.directions[i], spec.directions[i + 1]);
+                            if (direction.sqrMagnitude > 0.0001f) anchor.validDirections.Add(direction.normalized);
+                        }
+                    project.roadAnchors.Add(anchor);
+                }
             if (manifest.scatterGroups != null) ReplaceScatterGroups(project, manifest.scatterGroups);
             if (manifest.propGroups != null) ReplacePropGroups(project, manifest.propGroups);
             if (manifest.fixedGroups != null) ReplaceFixedGroups(project, manifest.fixedGroups);
@@ -332,6 +372,20 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 paintConfig = new PaintConfigSpec
                 {
                     minimumRoadRegionArea = cfg.minimumRoadRegionArea,
+                    roadExtensionStep = cfg.roadExtensionStep,
+                    roadWalkCurvatureRange = new[] { cfg.roadWalkCurvatureRange.x, cfg.roadWalkCurvatureRange.y },
+                    roadWalkCurvatureDirectionSwitchProbability = cfg.roadWalkCurvatureDirectionSwitchProbability,
+                    roadWalkDirectionFlipProbability = cfg.roadWalkDirectionFlipProbability,
+                    boundaryFollowDistance = cfg.boundaryFollowDistance,
+                    freeMaxTurnAngle = cfg.freeMaxTurnAngle,
+                    anchorGuideMaxTurnAngle = cfg.anchorGuideMaxTurnAngle,
+                    directionSearchStep = cfg.directionSearchStep,
+                    bezierProbeDistance = cfg.bezierProbeDistance,
+                    bezierCompletionDistance = cfg.bezierCompletionDistance,
+                    anchorSnapAngle = cfg.anchorSnapAngle,
+                    bezierGuideLookAhead = cfg.bezierGuideLookAhead,
+                    failedProbeAvoidanceAngle = cfg.failedProbeAvoidanceAngle,
+                    maximumRoadSteps = cfg.maximumRoadSteps,
                     minimumCorridorAspect = cfg.minimumCorridorAspect,
                     minimumSkeletonBranchLength = cfg.minimumSkeletonBranchLength,
                     spurLengthToWidthRatio = cfg.spurLengthToWidthRatio,
@@ -347,6 +401,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 roadTerrainLayers = ToPaths(project.roadTerrainLayers),
                 layers = ExportLayers(project.layers),
                 adjacencyGroups = ExportAdjacencyGroups(project.adjacencyGroups),
+                roadAnchors = ExportRoadAnchors(project.roadAnchors),
                 // 已处理的备用 Prefab 可被用户自由编辑，无法可靠反推其源 Prefab；导出时保留为空，
                 // 生成组则直接引用已处理的 Generated/Prefabs 资产。
                 prefabs = Array.Empty<PrefabSpec>(),
@@ -397,6 +452,29 @@ namespace AiTerrainWorkflow.Editor.Bridge
             var result = new IntGroupSpec[groups.Count];
             for (int i = 0; i < groups.Count; i++) result[i] = new IntGroupSpec { values = groups[i]?.ToArray() ?? Array.Empty<int>() };
             return result;
+        }
+
+        private static RoadAnchorSpec[] ExportRoadAnchors(List<RoadAnchorConfig> anchors)
+        {
+            if (anchors == null) return Array.Empty<RoadAnchorSpec>();
+            var result = new List<RoadAnchorSpec>();
+            foreach (RoadAnchorConfig anchor in anchors)
+            {
+                if (anchor == null) continue;
+                var directions = new List<float>();
+                if (anchor.validDirections != null)
+                    foreach (Vector2 direction in anchor.validDirections)
+                    {
+                        directions.Add(direction.x);
+                        directions.Add(direction.y);
+                    }
+                result.Add(new RoadAnchorSpec
+                {
+                    position = new[] { anchor.normalizedPosition.x, anchor.normalizedPosition.y },
+                    directions = directions.ToArray(),
+                });
+            }
+            return result.ToArray();
         }
 
         private static PaintOperationSpec[] ExportOperations(List<LayerPaintOperation> operations)
@@ -472,6 +550,26 @@ namespace AiTerrainWorkflow.Editor.Bridge
 
         private static void ApplyPaintConfig(TerrainPaintConfig target, PaintConfigSpec source)
         {
+            target.roadExtensionStep = Mathf.Max(0.1f, source.roadExtensionStep);
+            if (source.roadWalkCurvatureRange != null && source.roadWalkCurvatureRange.Length >= 2)
+            {
+                float min = Mathf.Min(source.roadWalkCurvatureRange[0], source.roadWalkCurvatureRange[1]);
+                float max = Mathf.Max(source.roadWalkCurvatureRange[0], source.roadWalkCurvatureRange[1]);
+                target.roadWalkCurvatureRange = new Vector2(min, max);
+            }
+            target.roadWalkCurvatureDirectionSwitchProbability =
+                Mathf.Clamp01(source.roadWalkCurvatureDirectionSwitchProbability);
+            target.roadWalkDirectionFlipProbability = Mathf.Clamp01(source.roadWalkDirectionFlipProbability);
+            target.boundaryFollowDistance = Mathf.Max(0f, source.boundaryFollowDistance);
+            target.freeMaxTurnAngle = Mathf.Clamp(source.freeMaxTurnAngle, 0f, 180f);
+            target.anchorGuideMaxTurnAngle = Mathf.Clamp(source.anchorGuideMaxTurnAngle, 0f, 180f);
+            target.directionSearchStep = Mathf.Clamp(source.directionSearchStep, 1f, 90f);
+            target.bezierProbeDistance = Mathf.Max(0f, source.bezierProbeDistance);
+            target.bezierCompletionDistance = Mathf.Max(0f, source.bezierCompletionDistance);
+            target.anchorSnapAngle = Mathf.Clamp(source.anchorSnapAngle, 0f, 180f);
+            target.bezierGuideLookAhead = Mathf.Clamp(source.bezierGuideLookAhead, 0.01f, 0.5f);
+            target.failedProbeAvoidanceAngle = Mathf.Clamp(source.failedProbeAvoidanceAngle, 0f, 90f);
+            target.maximumRoadSteps = Mathf.Max(1, source.maximumRoadSteps);
             target.minimumRoadRegionArea = Mathf.Max(0f, source.minimumRoadRegionArea);
             target.minimumCorridorAspect = Mathf.Max(0f, source.minimumCorridorAspect);
             target.minimumSkeletonBranchLength = Mathf.Max(0f, source.minimumSkeletonBranchLength);
@@ -484,6 +582,23 @@ namespace AiTerrainWorkflow.Editor.Bridge
         private static void ApplyLayers(TerrainPaintProjectSO project, LayerSpec[] specs)
         {
             if (specs == null) return;
+            string directory = ProjectDirectory(project);
+            while (project.layers.Count < specs.Length && project.layers.Count < TerrainPaintProjectSO.MaxLayerCount)
+            {
+                int index = project.layers.Count;
+                string path = directory + $"/Layer_{index:00}.asset";
+                LayerConfigSO layer = AssetDatabase.LoadAssetAtPath<LayerConfigSO>(path);
+                if (layer == null)
+                {
+                    layer = ScriptableObject.CreateInstance<LayerConfigSO>();
+                    layer.color = index == 0 ? LayerPalette.Transparent :
+                        LayerPalette.PresetColors[Mathf.Min(index - 1, LayerPalette.PresetColors.Length - 1)];
+                    layer.layerName = index == 0 ? "过渡(透明)" :
+                        LayerPalette.PresetDefaultNames[Mathf.Min(index - 1, LayerPalette.PresetDefaultNames.Length - 1)];
+                    AssetDatabase.CreateAsset(layer, path);
+                }
+                project.layers.Add(layer);
+            }
             foreach (LayerSpec spec in specs)
             {
                 if (spec == null || spec.index < 0 || spec.index >= project.layers.Count) continue;

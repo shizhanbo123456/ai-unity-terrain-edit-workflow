@@ -10,12 +10,12 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 地形贴图工作流窗口（改造自 LayerEditor 绘画窗口）。
     ///
-    /// 顶层八个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 贴图编辑 / 散布编辑 / 摆件编辑 / 定点编辑 / 应用。
+    /// 顶层九个子界面（顶部工具栏靠右）：工作流配置 / 区域编辑 / 高度编辑 / 道路编辑 / 贴图编辑 / 散布编辑 / 摆件编辑 / 定点编辑 / 应用。
     /// 「工作流配置」整页显示：全部已持久化 MapData 预览、Layer 数量（2~16）、各层颜色/名称（Layer0 透明锁定）。
     /// 「散布编辑」按多个 ScatterConfigSO 生成组配置均匀散布规则。
     /// 其余编辑子界面为左右分栏布局：
     ///   左栏（窄）：全局配置（上，该子界面专属的全局字段）+ 层级配置（下，逐层折叠），整体共同滚动
-    ///   右栏（宽）：信息生成（区域编辑=画布绘制；高度编辑=烘焙高度图；贴图编辑=距离场/路网计算）
+    ///   右栏（宽）：信息生成（区域编辑=画布绘制；高度编辑=烘焙高度图；道路编辑=距离场/路网计算）
     ///
     /// 窗口本身不存储持久数据：所有信息从总 SO（TerrainPaintProjectSO）加载，
     /// 修改直接写入 SO。创建新地形配置时自动创建 TerrainGeneratorConfigs/&lt;名称&gt;/ 子文件夹
@@ -36,6 +36,7 @@ namespace AiTerrainWorkflow.LayerEditor
             WorkflowConfig,
             AreaEdit,
             HeightEdit,
+            Road,
             Texture,
             ScatterEdit,
             PropEdit,
@@ -157,6 +158,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private void OnEnable()
         {
+            SceneView.duringSceneGui -= DrawRoadAnchorSceneHandles;
+            SceneView.duringSceneGui += DrawRoadAnchorSceneHandles;
             string path = EditorPrefs.GetString(PrefsLastProject, "");
             if (path.StartsWith(LegacyScriptConfigRootDirRelative + "/"))
             {
@@ -180,6 +183,7 @@ namespace AiTerrainWorkflow.LayerEditor
 
         private void OnDisable()
         {
+            SceneView.duringSceneGui -= DrawRoadAnchorSceneHandles;
             SavePaintMapIfAny();
             ClearMapDataPreviews();
         }
@@ -293,8 +297,8 @@ namespace AiTerrainWorkflow.LayerEditor
 
             GUILayout.FlexibleSpace();
 
-            // 八个子界面按工作流顺序排列，应用始终位于最后。
-            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "贴图编辑", "散布编辑", "摆件编辑", "定点编辑", "应用" };
+            // 九个子界面按工作流顺序排列，应用始终位于最后。
+            var mainNames = new[] { "工作流配置", "区域编辑", "高度编辑", "道路编辑", "贴图编辑", "散布编辑", "摆件编辑", "定点编辑", "应用" };
             int newMain = GUILayout.Toolbar((int)_mainTab, mainNames, EditorStyles.toolbarButton);
             if (newMain != (int)_mainTab)
             {
@@ -862,6 +866,7 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 case MainTab.AreaEdit: DrawAreaGlobalConfig(); break;
                 case MainTab.HeightEdit: DrawHeightGlobalConfig(); break;
+                case MainTab.Road: DrawRoadGlobalConfig(); break;
                 case MainTab.Texture: DrawTextureGlobalConfig(); break;
             }
             EditorUtility.SetDirty(_project);
@@ -898,19 +903,30 @@ namespace AiTerrainWorkflow.LayerEditor
                 MessageType.None);
         }
 
-        /// <summary>贴图编辑 · 全局配置：随机游走参数 + 全局种子 + TerrainLayer 池 + 邻接组 + 烘焙结果。</summary>
+        /// <summary>道路编辑 · 全局配置：锚点延伸、邻接组和道路数据结果。</summary>
+        private void DrawRoadGlobalConfig()
+        {
+            EditorGUILayout.LabelField("道路编辑 · 全局配置", EditorStyles.boldLabel);
+            DrawRoadGenerationConfig();
+            EditorGUILayout.Space(10);
+            DrawAdjacencyGroups();
+            EditorGUILayout.Space(10);
+            EditorGUILayout.LabelField("生成结果（只读）", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField($"距离场 Max: {_lastRMax:F2} m");
+            EditorGUILayout.HelpBox(
+                _project.HasMap("road")
+                    ? "道路数据已生成（MapData/road.txt），预览位于右侧。"
+                    : "尚未生成道路数据。",
+                MessageType.None);
+        }
+
+        /// <summary>贴图编辑 · 全局配置：TerrainLayer 池、贴图种子、噪声和平滑。</summary>
         private void DrawTextureGlobalConfig()
         {
             EditorGUILayout.LabelField("贴图编辑 · 全局配置", EditorStyles.boldLabel);
-            DrawGlobalConfig();
+            DrawTextureBlendConfig();
             EditorGUILayout.Space(10);
             DrawGlobalTerrainLayers();
-            EditorGUILayout.Space(10);
-            DrawAdjacencyGroups();
-
-            EditorGUILayout.Space(10);
-            EditorGUILayout.LabelField("烘焙结果（只读）", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField($"R 通道 Max: {_lastRMax:F2}");
         }
 
         /// <summary>邻接组（组合层级分组）编辑器：List&lt;List&lt;int&gt;&gt;，同一层级不可跨组重复。</summary>
@@ -997,7 +1013,17 @@ namespace AiTerrainWorkflow.LayerEditor
                     {
                         var layer = _project.layers[i];
                         if (layer == null) continue;
-                        DrawLayerConfig(i, layer);
+                        DrawTextureLayerConfig(i, layer);
+                    }
+                    break;
+
+                case MainTab.Road:
+                    EditorGUILayout.LabelField("层级配置 · 道路编辑", EditorStyles.boldLabel);
+                    for (int i = 0; i < _project.layers.Count; i++)
+                    {
+                        var layer = _project.layers[i];
+                        if (layer == null) continue;
+                        DrawRoadLayerConfig(i, layer);
                     }
                     break;
             }
@@ -1053,24 +1079,126 @@ namespace AiTerrainWorkflow.LayerEditor
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawGlobalConfig()
+        private void DrawRoadGenerationConfig()
         {
             var cfg = _project.config;
+            EditorGUILayout.LabelField("锚点道路延伸", EditorStyles.boldLabel);
+            cfg.roadExtensionStep = Mathf.Max(0.1f, EditorGUILayout.FloatField("延伸步长 (m)", cfg.roadExtensionStep));
+            Vector2 curvature = EditorGUILayout.Vector2Field("默认游走曲率 (°/步)", cfg.roadWalkCurvatureRange);
+            cfg.roadWalkCurvatureRange = new Vector2(Mathf.Min(curvature.x, curvature.y), Mathf.Max(curvature.x, curvature.y));
+            cfg.roadWalkCurvatureDirectionSwitchProbability = EditorGUILayout.Slider(
+                "曲率加减方向切换概率", cfg.roadWalkCurvatureDirectionSwitchProbability, 0f, 1f);
+            cfg.roadWalkDirectionFlipProbability = EditorGUILayout.Slider(
+                "当前偏转角反向概率", cfg.roadWalkDirectionFlipProbability, 0f, 1f);
+            cfg.boundaryFollowDistance = Mathf.Max(0f, EditorGUILayout.FloatField("边界跟随范围 (m)", cfg.boundaryFollowDistance));
+            cfg.freeMaxTurnAngle = EditorGUILayout.Slider("自由单步最大转向", cfg.freeMaxTurnAngle, 0f, 180f);
+            cfg.anchorGuideMaxTurnAngle = EditorGUILayout.Slider("锚点引导单步最大转向", cfg.anchorGuideMaxTurnAngle, 0f, 180f);
+            cfg.directionSearchStep = EditorGUILayout.Slider("方向搜索角步长", cfg.directionSearchStep, 1f, 90f);
+            cfg.bezierProbeDistance = Mathf.Max(0f, EditorGUILayout.FloatField("贝塞尔探测距离 (m)", cfg.bezierProbeDistance));
+            cfg.bezierCompletionDistance = Mathf.Clamp(EditorGUILayout.FloatField("贝塞尔补全距离 (m)", cfg.bezierCompletionDistance), 0f, cfg.bezierProbeDistance);
+            cfg.anchorSnapAngle = EditorGUILayout.Slider("锚点吸附角", cfg.anchorSnapAngle, 0f, 180f);
+            cfg.maximumRoadSteps = Mathf.Max(1, EditorGUILayout.IntField("最大延伸步数", cfg.maximumRoadSteps));
+            DrawRoadAnchorConfig();
+            EditorGUILayout.Space(6f);
             EditorGUILayout.LabelField("Layer 形状道路骨架", EditorStyles.boldLabel);
             cfg.minimumRoadRegionArea = Mathf.Max(0f, EditorGUILayout.FloatField("最小道路区域面积 (m²)", cfg.minimumRoadRegionArea));
             cfg.minimumCorridorAspect = Mathf.Max(0f, EditorGUILayout.FloatField("最小走廊形状比", cfg.minimumCorridorAspect));
             cfg.minimumSkeletonBranchLength = Mathf.Max(0f, EditorGUILayout.FloatField("最小骨架支路长度 (m)", cfg.minimumSkeletonBranchLength));
             cfg.spurLengthToWidthRatio = Mathf.Max(0f, EditorGUILayout.FloatField("支刺长度/宽度比", cfg.spurLengthToWidthRatio));
             cfg.roadBoundaryMargin = Mathf.Max(0f, EditorGUILayout.FloatField("道路边界留白 (m)", cfg.roadBoundaryMargin));
-            EditorGUILayout.Space(4f);
-            // gApplySpacing 已移除：新防卷曲逻辑按"滞后 2 步"逐点盖胶囊，不再需要盖章间距阈值。
+        }
+
+        private void DrawTextureBlendConfig()
+        {
+            var cfg = _project.config;
+            EditorGUILayout.LabelField("贴图混合", EditorStyles.boldLabel);
             cfg.noiseScale = Mathf.Max(0.01f, EditorGUILayout.FloatField("Noise Scale (m)", cfg.noiseScale));
             cfg.textureSmoothingRadius = Mathf.Max(0, EditorGUILayout.IntField("贴图平滑半径 (alphamap 像素)", cfg.textureSmoothingRadius));
-
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("全局贴图种子（value-noise）", EditorStyles.boldLabel);
             _project.naturalSeed = EditorGUILayout.IntField("自然贴图种子", _project.naturalSeed);
             _project.roadSeed = EditorGUILayout.IntField("道路贴图种子", _project.roadSeed);
+        }
+
+        private void DrawRoadAnchorConfig()
+        {
+            EditorGUILayout.LabelField("道路锚点（Scene 视图可拖动）", EditorStyles.boldLabel);
+            if (_project.roadAnchors == null) _project.roadAnchors = new List<RoadAnchorConfig>();
+            for (int i = 0; i < _project.roadAnchors.Count; i++)
+            {
+                RoadAnchorConfig anchor = _project.roadAnchors[i];
+                if (anchor == null) { anchor = new RoadAnchorConfig(); _project.roadAnchors[i] = anchor; }
+                EditorGUILayout.BeginVertical("box");
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("锚点 " + i, EditorStyles.boldLabel);
+                if (GUILayout.Button("删除", GUILayout.Width(48f)))
+                {
+                    Undo.RecordObject(_project, "删除道路锚点");
+                    _project.roadAnchors.RemoveAt(i--);
+                    EditorUtility.SetDirty(_project);
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.EndVertical();
+                    continue;
+                }
+                EditorGUILayout.EndHorizontal();
+                anchor.normalizedPosition = new Vector2(
+                    Mathf.Clamp01(EditorGUILayout.FloatField("归一化 X", anchor.normalizedPosition.x)),
+                    Mathf.Clamp01(EditorGUILayout.FloatField("归一化 Z", anchor.normalizedPosition.y)));
+                if (anchor.validDirections == null) anchor.validDirections = new List<Vector2>();
+                for (int d = 0; d < anchor.validDirections.Count; d++)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    Vector2 direction = EditorGUILayout.Vector2Field("方向 " + d, anchor.validDirections[d]);
+                    anchor.validDirections[d] = direction.sqrMagnitude > 0.0001f ? direction.normalized : Vector2.right;
+                    if (GUILayout.Button("-", GUILayout.Width(24f))) anchor.validDirections.RemoveAt(d--);
+                    EditorGUILayout.EndHorizontal();
+                }
+                if (GUILayout.Button("添加有效方向")) anchor.validDirections.Add(Vector2.right);
+                EditorGUILayout.EndVertical();
+            }
+            if (GUILayout.Button("添加道路锚点"))
+            {
+                Undo.RecordObject(_project, "添加道路锚点");
+                _project.roadAnchors.Add(new RoadAnchorConfig());
+                EditorUtility.SetDirty(_project);
+            }
+        }
+
+        private void DrawRoadAnchorSceneHandles(SceneView sceneView)
+        {
+            if (_mainTab != MainTab.Road || _project == null || _terrainField == null || _project.roadAnchors == null) return;
+            TerrainData data = _terrainField.terrainData;
+            if (data == null) return;
+            Vector3 origin = _terrainField.transform.position;
+            for (int i = 0; i < _project.roadAnchors.Count; i++)
+            {
+                RoadAnchorConfig anchor = _project.roadAnchors[i];
+                if (anchor == null) continue;
+                Vector3 world = origin + new Vector3(anchor.normalizedPosition.x * data.size.x, 0f,
+                    anchor.normalizedPosition.y * data.size.z);
+                world.y = _terrainField.SampleHeight(world) + origin.y + 0.5f;
+                Handles.color = new Color(1f, 0.75f, 0.1f, 1f);
+                EditorGUI.BeginChangeCheck();
+                Vector3 moved = Handles.PositionHandle(world, Quaternion.identity);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    Undo.RecordObject(_project, "移动道路锚点");
+                    anchor.normalizedPosition = new Vector2(
+                        Mathf.Clamp01((moved.x - origin.x) / Mathf.Max(0.0001f, data.size.x)),
+                        Mathf.Clamp01((moved.z - origin.z) / Mathf.Max(0.0001f, data.size.z)));
+                    EditorUtility.SetDirty(_project);
+                }
+                if (anchor.validDirections == null) continue;
+                float arrowLength = Mathf.Max(3f, _project.config.bezierCompletionDistance * 0.35f);
+                foreach (Vector2 direction in anchor.validDirections)
+                {
+                    if (direction.sqrMagnitude < 0.0001f) continue;
+                    Vector3 dir3 = new Vector3(direction.x, 0f, direction.y).normalized;
+                    Handles.ArrowHandleCap(0, world, Quaternion.LookRotation(dir3, Vector3.up),
+                        arrowLength, EventType.Repaint);
+                }
+                Handles.Label(world + Vector3.up, "Road Anchor " + i);
+            }
         }
 
         /// <summary>
@@ -1092,7 +1220,7 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawTerrainLayerPool(_project.roadTerrainLayers, "道路");
         }
 
-        private void DrawLayerConfig(int index, LayerConfigSO layer)
+        private void DrawRoadLayerConfig(int index, LayerConfigSO layer)
         {
             EditorGUILayout.BeginHorizontal();
             bool open = _layerFoldouts[index];
@@ -1108,16 +1236,27 @@ namespace AiTerrainWorkflow.LayerEditor
             if (!open)
                 return;
 
-            // ① 道路生成参数
             EditorGUILayout.BeginVertical("box");
             EditorGUILayout.LabelField("道路生成参数", EditorStyles.boldLabel);
             layer.generateRoad = EditorGUILayout.Toggle("生成道路", layer.generateRoad);
             layer.roadWidth = Mathf.Max(0.01f, EditorGUILayout.FloatField("Road Width (m)", layer.roadWidth));
             EditorGUILayout.EndVertical();
 
-            EditorGUILayout.Space(2);
+            EditorUtility.SetDirty(layer);
+        }
 
-            // ② 自然贴图混合权重
+        private void DrawTextureLayerConfig(int index, LayerConfigSO layer)
+        {
+            EditorGUILayout.BeginHorizontal();
+            bool open = _layerFoldouts[index];
+            var swatchRect = GUILayoutUtility.GetRect(16, 16, GUILayout.Width(16), GUILayout.Height(16));
+            var c = new Color(layer.color.r / 255f, layer.color.g / 255f, layer.color.b / 255f, 1f);
+            DrawTinted(swatchRect, c);
+            open = EditorGUILayout.Foldout(open, $"Layer{index}  {layer.layerName}", true);
+            _layerFoldouts[index] = open;
+            EditorGUILayout.EndHorizontal();
+            if (!open) return;
+
             EditorGUILayout.BeginVertical("box");
             EditorGUILayout.LabelField("自然贴图混合权重（0 = 不纳入；索引对应全局池）", EditorStyles.boldLabel);
             DrawWeightList(layer.naturalLayerWeights, _project.naturalTerrainLayers, "自然");
@@ -1125,7 +1264,6 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.Space(2);
 
-            // ③ 道路贴图混合权重
             EditorGUILayout.BeginVertical("box");
             EditorGUILayout.LabelField("道路贴图混合权重（0 = 不纳入；索引对应全局池）", EditorStyles.boldLabel);
             DrawWeightList(layer.roadLayerWeights, _project.roadTerrainLayers, "道路");
@@ -1143,6 +1281,7 @@ namespace AiTerrainWorkflow.LayerEditor
             {
                 case MainTab.AreaEdit: DrawAreaEditView(); break;
                 case MainTab.HeightEdit: DrawHeightEditView(); break;
+                case MainTab.Road: DrawRoadView(); break;
                 case MainTab.Texture: DrawTextureView(); break;
             }
         }
@@ -1509,23 +1648,23 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
-        // ---------- ② 贴图编辑 ----------
+        // ---------- 道路编辑 ----------
 
-        private void DrawTextureView()
+        private void DrawRoadView()
         {
             _texScroll = EditorGUILayout.BeginScrollView(_texScroll);
 
             EditorGUILayout.HelpBox(
-                "TerrainLayer 池、贴图种子与层级权重请在上方「全局配置」「层级配置」页签中编辑。\n" +
-                "本页签仅负责距离场 + 路网计算。计算与烘焙（height/distance/occupancy/road/offRoad）\n" +
+                "道路参数、邻接组、锚点与每层道路宽度请在左侧配置。\n" +
+                "本页负责距离场 + 锚点路网计算。计算与烘焙（distance/occupancy/road/offRoad）\n" +
                 "按目标 Terrain 实际尺寸换算世界尺度：请先在「应用」页签选择 Terrain。",
                 MessageType.Info);
 
             EditorGUILayout.Space(6);
             EditorGUILayout.LabelField("距离场 + 路网计算（RGB 三通道）", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "点击计算：按组合层级分组 → 距离场 R（maxD 自动归一化）→ 随机游走生成 G/B。\n" +
-                "结果合成一张 RGB 图：R=距离场（红），G=占用/间隔（绿），B=路面掩码（蓝）。",
+                "点击计算：按组合层级分组 → 距离场 R → 锚点延伸/贝塞尔连接生成中心线和路面。\n" +
+                "结果合成 RGB 图：R=距离场，G=道路中心线，B=路面掩码。",
                 MessageType.None);
 
             EditorGUILayout.BeginHorizontal();
@@ -1545,6 +1684,30 @@ namespace AiTerrainWorkflow.LayerEditor
 
             EditorGUILayout.EndScrollView();
             EditorUtility.SetDirty(_project);
+        }
+
+        // ---------- 贴图编辑 ----------
+
+        private void DrawTextureView()
+        {
+            _texScroll = EditorGUILayout.BeginScrollView(_texScroll);
+            EditorGUILayout.LabelField("Terrain 贴图配置", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "此界面只负责自然地表与道路地表的 TerrainLayer 池、每层混合权重、噪声种子和平滑参数。\n" +
+                "道路形状、锚点、邻接组与道路数据生成已经迁移到独立的「道路编辑」界面。\n" +
+                "贴图实际应用仍在最后的「应用」界面执行。",
+                MessageType.Info);
+            DrawTerrainLayerSummary(_project.naturalTerrainLayers, "自然 TerrainLayer");
+            DrawTerrainLayerSummary(_project.roadTerrainLayers, "道路 TerrainLayer");
+            EditorGUILayout.EndScrollView();
+        }
+
+        private static void DrawTerrainLayerSummary(List<TerrainLayer> layers, string label)
+        {
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField($"{label}: {layers.Count}", EditorStyles.boldLabel);
+            for (int i = 0; i < layers.Count; i++)
+                EditorGUILayout.LabelField($"[{i}] {(layers[i] != null ? layers[i].name : "未设置")}");
         }
 
         /// <summary>绘制一个 TerrainLayer 池的编辑列表（带添加/删除按钮）。</summary>
@@ -1628,7 +1791,7 @@ namespace AiTerrainWorkflow.LayerEditor
                 string names = string.Join(", ", dups.ConvertAll(i => $"Layer{i}"));
                 EditorUtility.DisplayDialog(
                     "计算失败",
-                    $"邻接组配置错误：以下层级被加入多个组，计算已阻断。\n{names}\n\n请到「贴图编辑 · 全局配置」的邻接组中修正。",
+                    $"邻接组配置错误：以下层级被加入多个组，计算已阻断。\n{names}\n\n请到「道路编辑 · 全局配置」的邻接组中修正。",
                     "确定");
                 return;
             }
