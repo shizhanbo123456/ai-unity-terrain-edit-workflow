@@ -81,6 +81,8 @@ namespace AiTerrainWorkflow.Editor.Bridge
         public int[] a;
         public int[] b;
         public int[] c;
+        [Tooltip("Polygon 顶点的扁平数组：[x0,y0,x1,y1,...]")]
+        public int[] points;
         public int radius;
         public int layerIndex;
     }
@@ -484,7 +486,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
             for (int i = 0; i < operations.Count; i++)
             {
                 LayerPaintOperation op = operations[i];
-                result[i] = new PaintOperationSpec { type = op.type.ToString(), a = new[] { op.pointA.x, op.pointA.y }, b = new[] { op.pointB.x, op.pointB.y }, c = new[] { op.pointC.x, op.pointC.y }, radius = op.radius, layerIndex = op.layerIndex };
+                result[i] = new PaintOperationSpec { type = op.type.ToString(), a = new[] { op.pointA.x, op.pointA.y }, b = new[] { op.pointB.x, op.pointB.y }, c = new[] { op.pointC.x, op.pointC.y }, points = FlattenPoints(op.points), radius = op.radius, layerIndex = op.layerIndex };
             }
             return result;
         }
@@ -705,7 +707,7 @@ namespace AiTerrainWorkflow.Editor.Bridge
                 if (spec == null) continue;
                 project.paintOperations.Add(new LayerPaintOperation
                 {
-                    type = ParseEnum(spec.type, LayerPaintOperationType.Line), pointA = Point(spec.a), pointB = Point(spec.b), pointC = Point(spec.c), radius = spec.radius, layerIndex = spec.layerIndex,
+                    type = ParseEnum(spec.type, LayerPaintOperationType.Line), pointA = Point(spec.a), pointB = Point(spec.b), pointC = Point(spec.c), points = Points(spec.points), radius = spec.radius, layerIndex = spec.layerIndex,
                 });
             }
         }
@@ -808,6 +810,25 @@ namespace AiTerrainWorkflow.Editor.Bridge
         }
         private static T ParseEnum<T>(string value, T fallback) where T : struct { return !string.IsNullOrWhiteSpace(value) && Enum.TryParse(value, true, out T parsed) ? parsed : fallback; }
         private static Vector2Int Point(int[] value) { return value != null && value.Length >= 2 ? new Vector2Int(value[0], value[1]) : Vector2Int.zero; }
+        private static List<Vector2Int> Points(int[] values)
+        {
+            var result = new List<Vector2Int>();
+            if (values == null) return result;
+            for (int i = 0; i + 1 < values.Length; i += 2)
+                result.Add(new Vector2Int(values[i], values[i + 1]));
+            return result;
+        }
+        private static int[] FlattenPoints(List<Vector2Int> points)
+        {
+            if (points == null || points.Count == 0) return Array.Empty<int>();
+            var result = new int[points.Count * 2];
+            for (int i = 0; i < points.Count; i++)
+            {
+                result[i * 2] = points[i].x;
+                result[i * 2 + 1] = points[i].y;
+            }
+            return result;
+        }
         private static GameObject LoadPrefab(string path) { return string.IsNullOrWhiteSpace(path) ? null : AssetDatabase.LoadAssetAtPath<GameObject>(NormalizeAssetPath(path)); }
         /// <summary>生成组引用加载：支持裸文件名（自动补全到备用 Prefab 目录）或完整 Assets 路径；顶层源 prefabs[] 仍走 LoadPrefab。</summary>
         private static GameObject LoadGroupPrefab(string path)

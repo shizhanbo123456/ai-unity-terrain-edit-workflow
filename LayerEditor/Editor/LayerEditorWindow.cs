@@ -28,6 +28,9 @@ namespace AiTerrainWorkflow.LayerEditor
             CircleBrush,
             RectFill,
             TriangleFill,
+            PolygonFill,
+            EllipseFill,
+            SectorFill,
         }
 
         /// <summary>顶层八个子界面，按工作流从配置、编辑到应用依次排列。</summary>
@@ -1473,7 +1476,7 @@ namespace AiTerrainWorkflow.LayerEditor
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
-            var toolNames = new[] { "圆形画笔", "矩形填充", "三角填充" };
+            var toolNames = new[] { "圆形画笔", "矩形", "三角形", "凸多边形", "圆形/椭圆", "扇形" };
             var newTool = GUILayout.Toolbar((int)_tool, toolNames, EditorStyles.toolbarButton);
             if (newTool != (int)_tool)
             {
@@ -1565,11 +1568,28 @@ namespace AiTerrainWorkflow.LayerEditor
             DrawRectOutline(drawRect, new Color(0.8f, 0.8f, 0.8f, 1f), 1f);
             DrawInteractionPreview(drawRect);
 
-            string hint = _tool == Tool.CircleBrush
-                ? (_erase ? "擦除：单击画圆，拖拽画直线条带" : "左键单击画圆，拖拽画直线条带")
-                : _tool == Tool.RectFill
-                    ? "左键拖拽定义矩形区域"
-                    : "依次点击 3 个顶点（已点 " + _triPoints.Count + " 个）";
+            string hint;
+            switch (_tool)
+            {
+                case Tool.CircleBrush:
+                    hint = _erase ? "擦除：单击画圆，拖拽画直线条带" : "左键单击画圆，拖拽画直线条带";
+                    break;
+                case Tool.RectFill:
+                    hint = "左键拖拽定义矩形区域";
+                    break;
+                case Tool.TriangleFill:
+                    hint = "依次点击 3 个顶点（已点 " + _triPoints.Count + " 个）";
+                    break;
+                case Tool.PolygonFill:
+                    hint = "依次点击凸多边形顶点，按 Enter 完成（已点 " + _triPoints.Count + " 个）";
+                    break;
+                case Tool.EllipseFill:
+                    hint = "拖拽两个点定义椭圆的 AABB 外切矩形";
+                    break;
+                default:
+                    hint = "依次点击圆心、起始弧点、结束弧点（已点 " + _triPoints.Count + " 个）";
+                    break;
+            }
             GUI.Label(new Rect(_canvasRect.x, _canvasRect.yMax - 20, _canvasRect.width, 20), hint);
         }
 
@@ -1623,12 +1643,15 @@ namespace AiTerrainWorkflow.LayerEditor
                 Vector2 start = PixToScreen(_dragStartPx, drawRect);
                 Vector2 cur = PixToScreen(_dragCurrentPx, drawRect);
 
-                if (_tool == Tool.RectFill)
+                if (_tool == Tool.RectFill || _tool == Tool.EllipseFill)
                 {
                     var r = new Rect(
                         Mathf.Min(start.x, cur.x), Mathf.Min(start.y, cur.y),
                         Mathf.Abs(cur.x - start.x), Mathf.Abs(cur.y - start.y));
-                    DrawTinted(r, color);
+                    if (_tool == Tool.RectFill)
+                        DrawTinted(r, color);
+                    else
+                        DrawEllipseOutline(r, color);
                 }
                 else if (_tool == Tool.CircleBrush)
                 {
@@ -1636,7 +1659,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 }
             }
 
-            if (_tool == Tool.TriangleFill && _triPoints.Count > 0)
+            if ((_tool == Tool.TriangleFill || _tool == Tool.PolygonFill || _tool == Tool.SectorFill)
+                && _triPoints.Count > 0)
             {
                 var color = CurrentLayerColor;
                 color.a = 0.5f;
@@ -1644,6 +1668,8 @@ namespace AiTerrainWorkflow.LayerEditor
                 {
                     Vector2 p = PixToScreen(_triPoints[i], drawRect);
                     DrawCross(p, 5f, color);
+                    if (i > 0)
+                        DrawThickLine(PixToScreen(_triPoints[i - 1], drawRect), p, 2f, color);
                 }
             }
         }
@@ -2358,6 +2384,21 @@ namespace AiTerrainWorkflow.LayerEditor
             }
         }
 
+        private void DrawEllipseOutline(Rect rect, Color color)
+        {
+            const int segments = 48;
+            Vector2 previous = new Vector2(rect.center.x + rect.width * 0.5f, rect.center.y);
+            for (int i = 1; i <= segments; i++)
+            {
+                float angle = i * Mathf.PI * 2f / segments;
+                Vector2 current = new Vector2(
+                    rect.center.x + Mathf.Cos(angle) * rect.width * 0.5f,
+                    rect.center.y + Mathf.Sin(angle) * rect.height * 0.5f);
+                DrawThickLine(previous, current, 2f, color);
+                previous = current;
+            }
+        }
+
         private void HandleCanvasEvents()
         {
             if (_map == null)
@@ -2377,6 +2418,25 @@ namespace AiTerrainWorkflow.LayerEditor
                 return;
             }
 
+            if (e.type == EventType.KeyDown && _tool == Tool.PolygonFill
+                && (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter))
+            {
+                if (_triPoints.Count >= 3)
+                {
+                    AddAndApplyPaintOperation(new LayerPaintOperation
+                    {
+                        type = LayerPaintOperationType.Polygon,
+                        points = new List<Vector2Int>(_triPoints),
+                        layerIndex = CurrentPaintLayerIndex,
+                    });
+                    PersistLayerMap();
+                }
+                _triPoints.Clear();
+                Repaint();
+                e.Use();
+                return;
+            }
+
             if (e.button != 0)
                 return;
 
@@ -2385,18 +2445,20 @@ namespace AiTerrainWorkflow.LayerEditor
                 if (!inCanvas)
                     return;
 
-                if (_tool == Tool.TriangleFill)
+                if (_tool == Tool.TriangleFill || _tool == Tool.PolygonFill || _tool == Tool.SectorFill)
                 {
                     Vector2Int px = ScreenToPix(e.mousePosition);
                     _triPoints.Add(px);
-                    if (_triPoints.Count == 3)
+                    if (_tool != Tool.PolygonFill && _triPoints.Count == 3)
                     {
                         var a = _triPoints[0];
                         var b = _triPoints[1];
                         var c = _triPoints[2];
                         AddAndApplyPaintOperation(new LayerPaintOperation
                         {
-                            type = LayerPaintOperationType.Triangle,
+                            type = _tool == Tool.TriangleFill
+                                ? LayerPaintOperationType.Triangle
+                                : LayerPaintOperationType.Sector,
                             pointA = a,
                             pointB = b,
                             pointC = c,
@@ -2446,6 +2508,16 @@ namespace AiTerrainWorkflow.LayerEditor
                     AddAndApplyPaintOperation(new LayerPaintOperation
                     {
                         type = LayerPaintOperationType.Rectangle,
+                        pointA = _dragStartPx,
+                        pointB = _dragCurrentPx,
+                        layerIndex = CurrentPaintLayerIndex,
+                    });
+                }
+                else if (_tool == Tool.EllipseFill)
+                {
+                    AddAndApplyPaintOperation(new LayerPaintOperation
+                    {
+                        type = LayerPaintOperationType.Ellipse,
                         pointA = _dragStartPx,
                         pointB = _dragCurrentPx,
                         layerIndex = CurrentPaintLayerIndex,

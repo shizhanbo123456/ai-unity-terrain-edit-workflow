@@ -10,6 +10,9 @@ namespace AiTerrainWorkflow.LayerEditor
         Line,
         Rectangle,
         Triangle,
+        Polygon,
+        Ellipse,
+        Sector,
     }
 
     /// <summary>区域编辑的一条可序列化绘画操作；点与半径均使用 LayerMap 像素坐标。</summary>
@@ -20,6 +23,7 @@ namespace AiTerrainWorkflow.LayerEditor
         public Vector2Int pointA;
         public Vector2Int pointB;
         public Vector2Int pointC;
+        public List<Vector2Int> points = new List<Vector2Int>();
         public int radius;
         public int layerIndex;
     }
@@ -27,8 +31,8 @@ namespace AiTerrainWorkflow.LayerEditor
     /// <summary>
     /// 层图数据：一张 CPU 可读写的 RGBA32 图片（Color32[] 缓冲 + Texture2D 呈现）。
     ///
-    /// 提供三类基础绘画：圆形画笔（单击画圆 / 拖拽画直线条带）、矩形区域填充、
-    /// 三角形区域填充。所有绘制均为"完全覆盖"（alpha 恒为 1，直接覆盖目标像素，
+    /// 提供圆形画笔、矩形、三角形、凸多边形、轴对齐椭圆和变半径扇形绘制。
+    /// 所有绘制均为"完全覆盖"（alpha 恒为 1，直接覆盖目标像素，
     /// 不做边缘模糊）；写入透明色 (0,0,0,0) 即擦除为过渡区域。
     ///
     /// 不依赖 UnityEditor，编辑器窗口与后续 bridge 命令行工具共用同一套绘制逻辑。
@@ -325,6 +329,15 @@ namespace AiTerrainWorkflow.LayerEditor
                 case LayerPaintOperationType.Triangle:
                     StampTriangle(a.x, a.y, b.x, b.y, c.x, c.y, color);
                     break;
+                case LayerPaintOperationType.Polygon:
+                    StampConvexPolygon(operation.points, color);
+                    break;
+                case LayerPaintOperationType.Ellipse:
+                    StampEllipse(a, b, color);
+                    break;
+                case LayerPaintOperationType.Sector:
+                    StampSector(a, b, c, color);
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(operation.type));
             }
@@ -358,6 +371,83 @@ namespace AiTerrainWorkflow.LayerEditor
             for (int x = minX; x <= maxX; x++)
                 if (PointInTriangle(x, y, x0, y0, x1, y1, x2, y2))
                     _pixels[y * Width + x] = color;
+        }
+
+        /// <summary>凸多边形按第一个顶点展开为三角扇；调用方应保证顶点沿边界有序。</summary>
+        private void StampConvexPolygon(IList<Vector2Int> points, Color32 color)
+        {
+            if (points == null || points.Count < 3) return;
+            Vector2Int origin = points[0];
+            for (int i = 1; i < points.Count - 1; i++)
+            {
+                Vector2Int b = points[i];
+                Vector2Int c = points[i + 1];
+                StampTriangle(origin.x, origin.y, b.x, b.y, c.x, c.y, color);
+            }
+        }
+
+        /// <summary>两个任意顺序的点定义 AABB，以该包围盒为外切矩形填充轴对齐椭圆。</summary>
+        private void StampEllipse(Vector2Int a, Vector2Int b, Color32 color)
+        {
+            int minX = Mathf.Max(0, Mathf.Min(a.x, b.x));
+            int maxX = Mathf.Min(Width - 1, Mathf.Max(a.x, b.x));
+            int minY = Mathf.Max(0, Mathf.Min(a.y, b.y));
+            int maxY = Mathf.Min(Height - 1, Mathf.Max(a.y, b.y));
+            float cx = (a.x + b.x) * 0.5f;
+            float cy = (a.y + b.y) * 0.5f;
+            float rx = Mathf.Abs(b.x - a.x) * 0.5f;
+            float ry = Mathf.Abs(b.y - a.y) * 0.5f;
+            for (int y = minY; y <= maxY; y++)
+            for (int x = minX; x <= maxX; x++)
+            {
+                float nx = rx > 0f ? (x - cx) / rx : (Mathf.Approximately(x, cx) ? 0f : float.PositiveInfinity);
+                float ny = ry > 0f ? (y - cy) / ry : (Mathf.Approximately(y, cy) ? 0f : float.PositiveInfinity);
+                if (nx * nx + ny * ny <= 1f)
+                    _pixels[y * Width + x] = color;
+            }
+        }
+
+        /// <summary>
+        /// 圆心、起始弧点、结束弧点定义最短有向扇形；半径沿起止夹角线性插值。
+        /// </summary>
+        private void StampSector(Vector2Int center, Vector2Int arcStart, Vector2Int arcEnd, Color32 color)
+        {
+            Vector2 start = arcStart - center;
+            Vector2 end = arcEnd - center;
+            float startRadius = start.magnitude;
+            float endRadius = end.magnitude;
+            if (startRadius <= 0.0001f || endRadius <= 0.0001f) return;
+
+            float startAngle = Mathf.Atan2(start.y, start.x) * Mathf.Rad2Deg;
+            float endAngle = Mathf.Atan2(end.y, end.x) * Mathf.Rad2Deg;
+            float sweep = Mathf.DeltaAngle(startAngle, endAngle);
+            if (Mathf.Abs(sweep) <= 0.0001f) return;
+            float maxRadius = Mathf.Max(startRadius, endRadius);
+            int minX = Mathf.Max(0, Mathf.FloorToInt(center.x - maxRadius));
+            int maxX = Mathf.Min(Width - 1, Mathf.CeilToInt(center.x + maxRadius));
+            int minY = Mathf.Max(0, Mathf.FloorToInt(center.y - maxRadius));
+            int maxY = Mathf.Min(Height - 1, Mathf.CeilToInt(center.y + maxRadius));
+
+            for (int y = minY; y <= maxY; y++)
+            for (int x = minX; x <= maxX; x++)
+            {
+                Vector2 offset = new Vector2(x - center.x, y - center.y);
+                if (offset.sqrMagnitude <= 0.0001f)
+                {
+                    _pixels[y * Width + x] = color;
+                    continue;
+                }
+                float angle = Mathf.Atan2(offset.y, offset.x) * Mathf.Rad2Deg;
+                float delta = Mathf.DeltaAngle(startAngle, angle);
+                bool insideAngle = sweep > 0f
+                    ? delta >= 0f && delta <= sweep
+                    : delta <= 0f && delta >= sweep;
+                if (!insideAngle) continue;
+                float t = Mathf.Clamp01(delta / sweep);
+                float radius = Mathf.Lerp(startRadius, endRadius, t);
+                if (offset.sqrMagnitude <= radius * radius)
+                    _pixels[y * Width + x] = color;
+            }
         }
 
         private void PushUndo()
