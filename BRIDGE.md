@@ -51,7 +51,7 @@ Billboard 模式：`None`、`CrossPlanes`、`FaceCamera`、`YawOnly`。构建备
 | _（已迁移）_ | — | 场景物体实例化/销毁、Prefab 资产内部编辑这 5 条通用命令已迁移至 `unity-python-bridge`，成为其原生命令 `gameobject.instantiate` / `gameobject.destroy` / `prefab.edit` / `prefab.remove` / `prefab.instantiate`（详见 bridge 仓库 `Runtime/Commands/`） |
 | `workflow.prefab.fix_pivot` | `path` | 计算 Prefab 所有 mesh 变换后的合并 Bounds，将「中心正下方」(center.x, min.y, center.z) 平移到原点 (0,0,0)；整体平移直接子物体、根节点保持零变换（与 `prefab.build` 内部创建时自动调用的标准化逻辑同源） |
 
-其余原生命令只处理生成资产、派生数据、校验或执行构建，不用于修改工作流配置。Python CLI 只暴露 `workflow.configure` 与 `workflow.run`；完整结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。
+其余原生命令只处理生成资产、派生数据、校验或执行构建，不用于修改工作流配置。Python CLI 暴露 `workflow.configure`、`workflow.run` 与只读的 `workflow.export`（与上文「完整命令行流程」一致）；完整结构统一放进 bridge 原生 `message` JSON，因此不要求修改 bridge 的 `BridgeArgs`。
 
 ## Manifest
 

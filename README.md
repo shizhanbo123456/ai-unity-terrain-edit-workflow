@@ -552,7 +552,17 @@ LayerEditor/
 
 Editor/
 ├── TerrainEditWorkflowMenu.cs  [已完成] 菜单入口（Tools / Terrain Edit Workflow）
-└── PrefabProcessingUtility.cs  [已完成] 构建候选包装 Prefab；批量更新 Billboard 与完整变换 Bounds
+├── PrefabProcessingUtility.cs  [已完成] 构建候选包装 Prefab；批量更新 Billboard 与完整变换 Bounds
+└── Bridge/
+    ├── WorkflowBridgeCommands.cs   [已完成] 工作流专属桥接命令（workflow.configure/export/prefab.*/bake/validate/build/run，挂在 bridge 的 [BridgeCommand] 框架上）
+    └── WorkflowObjectCommands.cs   [已完成] workflow.prefab.fix_pivot（备用 Prefab pivot 标准化，幂等）
+
+python/
+├── workflow_bridge.py          [已完成] 工作流 CLI（configure / export / run 三个子命令，依赖 unity_bridge 包）
+├── manifest.example.json       [已完成] 完整 manifest 模板（非片段）
+├── height_test_manifest.json   [已完成] 高度生成测试 manifest
+├── road_generation_test_manifest.json [已完成] 路网生成测试 manifest
+└── road_generation_test_check.py [已完成] 路网生成结果校验脚本
 
 ```
 
