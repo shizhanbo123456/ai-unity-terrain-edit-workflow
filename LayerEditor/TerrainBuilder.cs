@@ -191,7 +191,10 @@ namespace AiTerrainWorkflow.LayerEditor
             terrainData.SetHeights(0, 0, normalized);
         }
 
-        /// <summary>噪声混合自然/道路各自的权重结果，再按道路噪声参数混合两类地表。</summary>
+        /// <summary>
+        /// 先独立生成“全自然地面”和“全道路”两套 TerrainLayer 权重场，
+        /// 再生成单通道道路混合图，并仅按该图的 0~1 值插值两套权重。
+        /// </summary>
         private void ApplyTexture()
         {
             float[][] layerMap = MapData.Get("layerMap");
@@ -200,14 +203,6 @@ namespace AiTerrainWorkflow.LayerEditor
                 Debug.LogWarning("[TerrainBuilder] layerMap 缺失，跳过贴图应用。");
                 return;
             }
-            EnsureRoadMapData(layerMap, mapW, mapH);
-            float[][] road = MapData.Get("road");
-            if (!HasMapSize(road, mapW, mapH))
-            {
-                Debug.LogWarning("[TerrainBuilder] road MapData 缺失，跳过贴图应用。");
-                return;
-            }
-
             List<TerrainLayer> terrainLayers = BuildTerrainLayerUnion();
             if (terrainLayers.Count == 0)
             {
@@ -219,9 +214,12 @@ namespace AiTerrainWorkflow.LayerEditor
             terrainData.terrainLayers = terrainLayers.ToArray();
             int alphaW = terrainData.alphamapWidth;
             int alphaH = terrainData.alphamapHeight;
+            var naturalAlphamaps = new float[alphaH, alphaW, terrainLayers.Count];
+            var roadAlphamaps = new float[alphaH, alphaW, terrainLayers.Count];
             var alphamaps = new float[alphaH, alphaW, terrainLayers.Count];
             float noiseScale = Mathf.Max(0.01f, _config.config.noiseScale);
 
+            // 贴图生成阶段：道路形状尚未参与，分别计算两个完整的候选权重场。
             for (int z = 0; z < alphaH; z++)
             {
                 float v = alphaH > 1 ? (float)z / (alphaH - 1) : 0f;
@@ -245,18 +243,40 @@ namespace AiTerrainWorkflow.LayerEditor
                         terrainLayers,
                         sampleWorldX, sampleWorldZ, _config.roadSeed, noiseScale);
 
-                    float roadMask = Mathf.Clamp01(SampleNearest(road, u, v));
-                    float roadNoise = Mathf.PerlinNoise(
-                        sampleWorldX / noiseScale + _config.roadSeed * 0.173f,
-                        sampleWorldZ / noiseScale + _config.roadSeed * 0.317f);
-                    float roadBlend = roadMask * roadNoise;
-                    if (!HasPositiveWeight(roadWeights)) roadBlend = 0f;
-                    if (!HasPositiveWeight(natural)) roadBlend = 1f;
+                    for (int i = 0; i < terrainLayers.Count; i++)
+                    {
+                        naturalAlphamaps[z, x, i] = natural[i];
+                        roadAlphamaps[z, x, i] = roadWeights[i];
+                    }
+                }
+            }
+
+            // 道路生成阶段：只产生一个 0~1 混合值，不再用额外噪声削弱道路中心。
+            EnsureRoadMapData(layerMap, mapW, mapH);
+            float[][] road = MapData.Get("road");
+            if (!HasMapSize(road, mapW, mapH))
+            {
+                Debug.LogWarning("[TerrainBuilder] road MapData 缺失，跳过贴图应用。");
+                return;
+            }
+
+            for (int z = 0; z < alphaH; z++)
+            {
+                float v = alphaH > 1 ? (float)z / (alphaH - 1) : 0f;
+                for (int x = 0; x < alphaW; x++)
+                {
+                    float u = alphaW > 1 ? (float)x / (alphaW - 1) : 0f;
+                    float roadBlend = Mathf.Clamp01(SampleNearest(road, u, v));
+                    bool hasNatural = HasPositiveWeight(naturalAlphamaps, z, x);
+                    bool hasRoad = HasPositiveWeight(roadAlphamaps, z, x);
+                    if (!hasRoad) roadBlend = 0f;
+                    if (!hasNatural) roadBlend = 1f;
 
                     float total = 0f;
                     for (int i = 0; i < terrainLayers.Count; i++)
                     {
-                        float value = Mathf.Lerp(natural[i], roadWeights[i], roadBlend);
+                        float value = Mathf.Lerp(
+                            naturalAlphamaps[z, x, i], roadAlphamaps[z, x, i], roadBlend);
                         alphamaps[z, x, i] = value;
                         total += value;
                     }
@@ -1550,10 +1570,11 @@ namespace AiTerrainWorkflow.LayerEditor
             return result;
         }
 
-        private static bool HasPositiveWeight(float[] weights)
+        private static bool HasPositiveWeight(float[,,] weights, int z, int x)
         {
-            for (int i = 0; i < weights.Length; i++)
-                if (weights[i] > 0f) return true;
+            int layerCount = weights.GetLength(2);
+            for (int layer = 0; layer < layerCount; layer++)
+                if (weights[z, x, layer] > 0f) return true;
             return false;
         }
 
